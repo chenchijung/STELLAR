@@ -1,0 +1,4637 @@
+
+	title	Stellar compiler  compile module
+	subttl	Rev 1.01  08/30/1984
+	name	('cmpmod')
+.z80
+;*****************************************************
+;*                                                   *
+;*       Stellar compiler    compile module          *
+;*             ( Rev 1.01 )                          *
+;*                                                   *
+;*      Copyright (c) 1984 H.Ohnuki / MIA            *
+;*                                                   *
+;*****************************************************
+
+;-----------------------------------------------------
+;-		external symbol			     -
+;-----------------------------------------------------
+
+;
+;  i/o module
+;
+	external	getsou,putobj
+	external	stptyp,retadr
+	external	defsta,dsaind
+	external	regsym,seasym,elisym
+	external	clrstb
+	external	putglo,prtmsg
+	external	abort,error
+	external	ddspfn,ddspli
+	external	inclu,edincl,pbreak,tron,troff
+;
+;  run time module
+;
+	external	@start,@stop
+	external	@mul.m,@mul.r
+	external	@div.m,@div.r,@rem.m,@rem.r
+	external	@shl.m,@shl.r,@shr.m,@shr.r
+	external	@setag,@prog
+	external	@rtwork,@stptp,@retad,@temp,@var
+	external	crelat,drelat
+
+;-----------------------------------------------------
+;-		p r o g r a m			     -
+;-----------------------------------------------------
+		cseg
+
+;
+;  start of compile
+;
+compil::
+	call	getsou		;get source program ( first line )
+	ret	c
+	ld	(cptr),hl
+	ld	(lino),de
+	call	gtoken		;get first token
+	cp	80h		;'prog' ?
+	jp	nz,synerr
+	call	gtoken
+	dec	a
+	jp	nz,synerr
+	call	movname
+;
+;  option switch
+;
+	xor	a
+	ld	(optisw),a	;option switch all off
+	call	gtoken
+	cp	'('
+	jp	nz,synerr
+compil1:
+	call	gtoken
+	cp	')'
+	jp	z,compil7
+	cp	'%'
+	jp	nz,opserr
+	call	gtoken
+	cp	84h		;'debug' ?
+	jr	nz,compil2
+	ld	hl,optisw
+	set	4,(hl)		;%debug sw on
+	call	gtoken
+	jr	compil6
+compil2:
+	dec	a
+	jp	nz,opserr
+	ld	hl,(identi)
+	ld	a,h
+	or	a
+	jp	nz,opserr
+	ld	a,l
+	call	traupc		;translate to upper case
+	push	af
+	call	gtoken
+	cp	':'
+	jp	nz,opserr
+	pop	af
+	cp	'P'		;%p ?
+	jr	nz,compil3
+	ld	hl,optisw
+	set	7,(hl)		;%p sw on
+	ld	b,80h
+	jr	compil5
+compil3:
+	cp	'D'		;%d ?
+	jr	nz,compil4
+	ld	hl,optisw
+	set	6,(hl)
+	ld	b,40h
+	jr	compil5
+compil4:
+	cp	'S'		;%s ?
+	jp	nz,opserr
+	ld	hl,optisw
+	set	5,(hl)
+	ld	b,20h
+compil5:
+	push	bc
+	call	gtoken
+	call	wodcon		;word constant
+	pop	af
+	add	a,a
+	jr	nc,$+5
+	ld	(codorg),hl	;set code segment origin address
+	add	a,a
+	jr	nc,$+5
+	ld	(datorg),hl	;set data segment origin address
+	add	a,a
+	jr	nc,$+5
+	ld	(stkbot),hl	;set stack bottom address
+compil6:
+	ld	a,(tokcod)
+	cp	','
+	jr	z,compil1
+	cp	')'
+	jp	nz,opserr
+compil7:
+	call	gtoken
+	cp	';'
+	jp	nz,synerr
+	ld	a,(optisw)
+	bit	4,a		;%debug sw on ?
+	ld	a,55h
+	jr	z,$+4
+	ld	a,65h
+	call	putobj		;put start mark
+	ld	hl,(codorg)
+	ld	(cloc),hl	;set code location counter
+	call	ptloc
+	ld	hl,(datorg)
+	ld	(dloc),hl	;set data location counter
+	ld	(wloc),hl
+	ld	a,56h
+	call	ptname		;put program name
+	ld	hl,pgnati
+	call	prtmsg
+	ld	hl,strbuf
+	call	prtmsg		;print program name
+	call	otrunt		;output run time routine
+	call	clrstb		;clear symbol table
+;
+;  define figurative constant
+;
+	ld	hl,(datorg)
+	call	deficn
+	defb	'_work',0
+
+	ld	hl,(dloc)
+	call	deficn
+	defb	'_var',0
+
+	ld	hl,(codorg)
+	call	deficn
+	defb	'_code',0
+
+;
+;  main
+;
+main::
+	ld	d,3eh		;"  LD	A,STOP_TYPE   "
+	ld	e,stptyp
+	call	ptcod2
+	ld	a,32h		;"  LD	(@STPTY),A    "
+	ld	hl,(datorg)
+	ld	de,@stptp-@rtwork
+	add	hl,de
+	call	ptcod3
+	ld	a,stptyp
+	or	a		;halt ?
+	jr	z,main0
+	dec	a		;ret ?
+	jr	nz,main0.5
+	ld	de,0ed73h	;"  LD	(@RETAD),SP	"
+	call	ptcod2
+	jr	main0.6
+main0.5:
+	ld	a,021h		;"  LD	HL,RETURN_ADDRESS	"
+	ld	hl,retadr
+	call	ptcod3
+	ld	a,22h		;"  LD	(@RETAD),HL	"
+	call	ptcod1
+main0.6:
+	ld	hl,(datorg)
+	ld	de,@retad-@rtwork
+	add	hl,de
+	call	ptcodw
+main0:
+	ld	a,(optisw)
+	ld	hl,(stkbot)
+	bit	5,a		;%s on ?
+	jr	nz,main1
+	ld	a,dsaind
+	ld	hl,defsta
+	or	a		;indirect ?
+	jr	z,main1
+	push	hl
+	ld	de,0ed7bh	; LD  SP,(DEFSTA)	"
+	call	ptcod2
+	pop	hl
+	call	ptcodw
+	jr	main2
+main1:
+	ld	a,31h		;"  LD  SP,nn	"
+	call	ptcod3
+main2:
+	ld	a,21h		;"  LD  HL,@STOP  "
+	ld	hl,(codorg)
+	ld	de,@stop-@start
+	add	hl,de
+	call	ptcod3
+	ld	a,0e5h		;"  PUSH  HL  "
+	call	ptcod1
+
+	call	gtoken
+	xor	a
+	ld	(idxpsf),a
+	call	defdcl		;global conatant,variable,data
+	cp	'{'
+	jp	nz,synerr
+	ld	a,0ffh
+	ld	(stmflg),a
+	ld	hl,(lino)
+	call	ddspli		;line number display object out
+	call	pshlea
+	call	compou		;( statement ... )
+	call	poplea
+	xor	a
+	ld	(stmflg),a
+	call	gtoken
+	ld	a,0c9h		;"  RET  "
+	call	ptcod1
+;
+;  function
+;
+functi::
+	call	elisym		;elimaination local symbol
+	ld	a,(tokcod)
+	inc	a		;end ?
+	jp	z,endcom
+	xor	a
+	ld	(idxpsf),a
+	ld	h,a
+	ld	l,a
+	ld	(retjad),hl
+	push	af
+	call	defdcl		;global constant,variable,data
+	cpl
+	ld	(localf),a
+	ld	a,(tokcod)
+	cp	0ffh		;end ?
+	jr	nz,functi0
+	pop	af
+	jp	endcom
+functi0:
+	cp	8fh		;'recursive' ?
+	jr	nz,functi1
+	pop	af
+	or	80h
+	push	af
+	call	gtoken
+functi1:
+	dec	a		;identifier ?
+	jp	nz,ilferr
+	ld	hl,idetyp
+	call	seasym		;search symbol table
+	ld	b,09h
+	or	a		;found ?
+	jr	nz,functi2
+	ld	a,(idetyp)
+	cp	89h		;function ?
+	jr	z,functi1.5
+	push	bc
+	call	ilefun
+	pop	bc
+	jr	functi2
+functi1.5:
+	ld	hl,(adrs)
+	push	af
+	call	ptcha		;put chain address
+	pop	bc
+functi2:
+	ld	hl,(cloc)
+	ld	(adrs),hl
+	res	7,b
+	ld	hl,idetyp
+	ld	(hl),b
+	call	regsym		;symbol table register
+	call	movname
+	ld	a,57h
+	call	ptname		;put function name
+	ld	hl,funati
+	call	prtmsg
+	ld	hl,strbuf
+	push	hl
+	call	prtmsg		;print function name
+	pop	hl
+	call	ddspfn		;function name display object out
+	call	gtoken
+	cp	'('
+	jp	nz,synerr
+	ld	hl,(dloc)
+	ld	(varadr),hl
+	xor	a
+	ld	(varsiz),a
+	call	gtoken
+	cp	';'
+	jr	z,functi5
+	cp	')'
+	jr	z,functi10
+	dec	a		;identifier ?
+	jp	nz,ilnerr
+	jr	$+5
+functi3:
+	call	gtoken
+	call	symchk		;symbol search & type check
+	or	02h
+	ld	hl,(dloc)
+	ld	(adrs),hl
+	ld	hl,idetyp
+	ld	(hl),a
+	call	regsym		;symbol table register
+	ld	hl,(dloc)
+	inc	hl
+	ld	(dloc),hl
+	ld	(wloc),hl
+	ld	hl,varsiz
+	ld	a,(hl)
+	cp	32
+	jr	nc,$+3
+	inc	(hl)
+	call	gtoken
+	cp	','
+	jr	z,functi3
+	cp	';'
+	jr	z,functi5
+	cp	')'
+	jr	z,functi10
+	jp	synerr
+functi5:
+	call	gtoken
+	cp	'#'
+	jr	nz,functi6
+	pop	af
+	or	1000b
+	push	af
+	call	gtoken
+functi6:
+	cp	0bfh		;'ix' ?
+	jr	nz,functi7
+	pop	af
+	or	0100b
+	push	af
+	call	gtoken
+functi7:
+	cp	','
+	jr	nz,functi9
+	call	gtoken
+	cp	'#'
+	jr	nz,functi8
+	pop	af
+	or	0010b
+	push	af
+	call	gtoken
+functi8:
+	cp	0c0h		;'iy' ?
+	jr	nz,functi9
+	pop	af
+	or	0001b
+	push	af
+	call	gtoken
+functi9:
+	cp	')'
+	jp	nz,synerr
+functi10:
+	pop	af
+	bit	2,a
+	jr	z,functi11
+	push	af
+	ld	a,22h		;"  LD	(TEMP1),HL  "
+	ld	hl,(datorg)
+	ld	de,@temp-@rtwork
+	add	hl,de
+	call	ptcod3
+	pop	af
+functi11:
+	bit	0,a
+	jr	z,functi12
+	push	af
+	ld	de,0ed53h	;"  LD	(TEMP2),DE  "
+	call	ptcod2
+	ld	hl,(datorg)
+	ld	de,@temp+2-@rtwork
+	add	hl,de
+	call	ptcodw
+	pop	af
+functi12:
+	push	af
+	ld	a,(varsiz)
+	ld	e,a
+	ld	d,0eh		;"  LD	C,n  "
+	call	ptcod2
+	ld	a,11h		;"  LD  DE,0  "
+	ld	hl,0
+	call	ptcod3
+	ld	hl,(varadr)
+	pop	af
+	bit	7,a
+	jr	z,functi13
+	push	hl
+	ld	de,(cloc)
+	dec	de
+	dec	de
+	push	de
+functi13:
+	push	af
+	ld	a,21h		;"  LD	HL,nn
+	call	ptcod3
+	ld	a,0cdh		;"  CAll @SETAG  "
+	ld	hl,(codorg)
+	ld	de,@setag-@start
+	add	hl,de
+	call	ptcod3
+	pop	af
+	bit	3,a
+	jr	nz,functi14
+	push	af
+	ld	de,0dde5h	;"  PUAH IX"
+	call	ptcod2
+	ld	a,0ffh
+	ld	(idxpsf),a
+	pop	af
+functi14:
+	bit	1,a
+	jr	nz,functi15
+	push	af
+	ld	de,0fde5h	;"  PUSH IY"
+	call	ptcod2
+	ld	a,0ffh
+	ld	(idxpsf),a
+	pop	af
+functi15:
+	bit	2,a
+	jr	z,functi16
+	push	af
+	ld	de,0dd2ah	;"  LD	IX,(TEMP1) "
+	call	ptcod2
+	ld	hl,(datorg)
+	ld	de,@temp-@rtwork
+	add	hl,de
+	call	ptcodw
+	pop	af
+functi16:
+	bit	0,a
+	jr	z,functi17
+	push	af
+	ld	de,0fd2ah	;"LD	IY,(TEMP2) "
+	call	ptcod2
+	ld	hl,(datorg)
+	ld	de,@temp+2-@rtwork
+	add	hl,de
+	call	ptcodw
+	pop	af
+functi17:
+	push	af
+	call	gtoken
+	cp	';'
+	jp	nz,synerr
+;
+	call	gtoken
+	ld	a,0ffh
+	call	defdcl		;local constant,variable,data
+	cp	'{'
+	jp	nz,synerr
+	ld	a,0ffh
+	ld	(stmflg),a
+	ld	hl,(lino)
+	call	ddspli		;line number display object out
+	call	pshlea
+	call	compou		;{ statement ... }
+	call	poplea
+	xor	a
+	ld	(stmflg),a
+	call	gtoken
+;
+	ld	hl,(retjad)
+	ld	a,h
+	or	l
+	call	nz,ptcha	;put chain address
+	pop	af
+	bit	1,a
+	jr	nz,functi18
+	push	af
+	ld	de,0fde1h	;"  POP	IY  "
+	call	ptcod2
+	pop	af
+functi18:
+	bit	3,a
+	jr	nz,functi19
+	push	af
+	ld	de,0dde1h	;"  POP IX "
+	call	ptcod2
+	pop	af
+functi19:
+	push	af
+	ld	a,0c9h		;"  RET  "
+	call	ptcod1
+	pop	af
+	add	a,a
+	jp	nc,functi
+	pop	hl
+	call	ptloc		;put location count
+	pop	de
+	ld	hl,(dloc)
+	or	a
+	sbc	hl,de
+	call	ptcodw		;put word code
+	ld	hl,(cloc)
+	dec	hl
+	dec	hl
+	ld	(cloc),hl
+	call	ptloc		;put location count
+	jp	(functi)
+;
+;  end of compile
+;
+endcom::
+	call	putglo		;put global symbol
+	ld	a,0ffh		;put end mark
+	call	putobj
+	ret
+;
+pgnati:	defb	13,10,'Program  name : ',0
+funati:	defb	13,10,'Function name : ',0
+;
+;	**  run time routine relocating out  **
+;
+otrunt::
+	ld	bc,@prog-@start
+	ld	hl,@start
+	ld	ix,crelat
+	ld	iy,drelat
+otrunt1:
+	ld	a,l
+	cp	(ix)		;relocate ?
+	jr	nz,otrunt2
+	ld	a,h
+	cp	(ix+1)
+	jr	nz,otrunt2
+	inc	ix
+	inc	ix
+	ld	de,@start	;relocatiog code segment address
+	ld	a,(hl)
+	sub	e
+	ld	e,a
+	inc	hl
+	ld	a,(hl)
+	sbc	a,d
+	ld	d,a
+	push	hl
+	ld	hl,(codorg)
+	add	hl,de
+	jr	otrunt4
+otrunt2:
+	ld	a,l
+	cp	(iy)		;relocate ?
+	jr	nz,otrunt3
+	ld	a,h
+	cp	(iy+1)
+	jr	nz,otrunt3
+	inc	iy
+	inc	iy
+	ld	de,@rtwork	;relocatiog data segment address
+	ld	a,(hl)
+	sub	e
+	ld	e,a
+	inc	hl
+	ld	a,(hl)
+	sbc	a,d
+	ld	d,a
+	push	hl
+	ld	hl,(datorg)
+	add	hl,de
+	jr	otrunt4
+otrunt3:
+	ld	a,(hl)
+	push	hl
+	push	bc
+	call	ptcod1		;put byte code
+	jr	otrunt5
+otrunt4:
+	dec	bc
+	push	bc
+	call	ptcodw		;put word code
+otrunt5:
+	pop	bc
+	pop	hl
+	inc	hl
+	dec	bc
+	ld	a,b
+	or	c
+	jr	nz,otrunt1
+;
+	ld	hl,(dloc)	;reserve run time work
+	ld	de,@var-@rtwork
+	add	hl,de
+	ld	(dloc),hl
+	ret
+;
+;	**  define figurative constant  **
+;
+deficn:: ;	hl	  : constant value
+	 ;	m(sp+1,sp): constant name address
+	ld	(adrs),hl
+	ld	hl,idetyp
+	ld	(hl),01h		;global constant
+	pop	de
+deficn1:
+	ld	a,(de)
+	inc	de
+	inc	hl
+	ld	(hl),a
+	or	a
+	jr	nz,deficn1
+	push	de
+	ld	hl,idetyp
+	jp	regsym		;symbol table register
+;
+;	**  constant definition & variable, data declare  **
+;
+defdcl:: ;	a : 00h=global, not 00h=local
+	ld	(localf),a
+defdcl1:
+	ld	a,(tokcod)
+	cp	'%'		;%include,%break,%tron,%troff ?
+	jr	nz,defdcl2
+	call	gtoken
+	call	iclstm
+	jr	defdcl1
+defdcl2:
+	cp	8ch		;'cons' ?
+	jr	nz,defdcl3
+	call	condef
+	jr	defdcl1
+defdcl3:
+	cp	8dh		;'var' ?
+	jr	nz,defdcl4
+	call	vardcl
+	jr	defdcl1
+defdcl4:
+	cp	8eh		;'data' ?
+	ret	nz
+	call	datdcl
+	jr	defdcl1
+;
+; constant definition
+;
+condef::
+	call 	gtoken
+	dec	a		;identifier ?
+	jp	nz,ilnerr
+	call	symchk		;symbol search & type check
+	or	01h		;type = constant name
+	ld	bc,adrs-idetyp
+	ld	hl,idetyp
+	ld	(hl),a
+	call	blkpsh		;block push
+	call	gtoken
+	cp	0f0h		;':=' ?
+	jp	nz,synerr
+	call	gtoken
+	call	conexp		;constant expression
+	ld	(adrs),hl
+	ld	bc,adrs-idetyp
+	ld	hl,idetyp
+	call	blkpop		;block pop
+	ld	hl,idetyp
+	call	regsym		;symbol table register
+	ld	a,(tokcod)
+	cp	','
+	jr	z,condef
+	cp	';'
+	jp	nz,synerr
+	jp	gtoken
+;
+;  variable declare
+;
+vardcl::
+	call	gtoken
+	dec	a		;identifier ?
+	jp	nz,ilnerr
+	call	symchk		;symbol search & type check
+	or	02h		;type = variable name
+	ld	hl,(dloc)
+	ld	(varadr),hl
+	ld	hl,1
+	ld	(varsiz),hl
+	ld	bc,adrs-idetyp
+	ld	hl,idetyp
+	ld	(hl),a
+	call	blkpsh		;block push
+	call	gtoken
+	cp	'['
+	jr	nz,vardcl1
+	call	gtoken
+	call	conexp		;constant expression
+	ld	(varsiz),hl
+	ld	a,(tokcod)
+	cp	']'
+	jp	nz,synerr
+	call	gtoken
+vardcl1:
+	cp	0beh		;'at' ?
+	jr	nz,vardcl2
+	call	gtoken
+	cp	'('
+	jp	nz,synerr
+	call	gtoken
+	call	conexp		;constant expression
+	ld	(varadr),hl
+	ld	hl,0
+	ld	(varsiz),hl
+	ld	a,(tokcod)
+	cp	')'
+	jp	nz,synerr
+	call	gtoken
+vardcl2:
+	ld	hl,(varadr)
+	ld	(adrs),hl
+	ld	bc,adrs-idetyp
+	ld	hl,idetyp
+	call	blkpop		;block pop
+	ld	hl,idetyp
+	call	regsym		;symbol table register
+	ld	hl,(dloc)
+	ld	de,(varsiz)
+	add	hl,de
+	ld	(dloc),hl
+	ld	(wloc),hl
+	ld	a,(tokcod)
+	cp	','
+	jp	z,vardcl
+	cp	';'
+	jp	nz,synerr
+	jp	gtoken
+;
+;  data declare & inline statement
+;
+inlstm::
+	ld	a,2
+	ld	(datinl),a
+	jr	datdcl2
+datdcl:
+	ld	a,1
+	ld	(datinl),a
+	ld	a,0c3h		;"  JP	  0  "
+	ld	hl,0
+	call	ptcod3
+	ld	hl,(cloc)
+	dec	hl
+	dec	hl
+	ld	(skpadr),hl
+datdcl1:
+	call	gtoken
+datdcl2:
+	ld	a,(datinl)
+	dec	a		;data decalre
+	jr	nz,datdcl3
+	ld	a,(tokcod)
+	dec	a
+	jr	nz,datdcl3
+	ld	hl,(cptr)
+	ld	a,(hl)
+	cp	':'		;data name ?
+	jr	nz,datdcl3
+	inc	hl
+	ld	(cptr),hl
+	call	symchk		;symbol search & type check
+	or	03h		;type = data name
+	ld	hl,(cloc)
+	ld	(adrs),hl
+	ld	hl,idetyp
+	ld	(hl),a
+	call	regsym		;symbol table register
+	call	gtoken
+datdcl3:
+	ld	a,(tokcod)
+	cp	'"'		;string ?
+	jr	nz,datdcl6
+	ld	hl,(cptr)
+datdcl4:
+	ld	a,(hl)
+	inc	hl
+	cp	'"'
+	jr	nz,datdcl5
+	ld	a,(hl)
+	inc	hl
+	cp	'"'
+	jr	z,datdcl5
+	dec	hl
+	ld	(cptr),hl
+	call	gtoken
+	jr	datdcl8
+datdcl5:
+	or	a
+	jr	nz,datdcl5.5
+	dec	hl
+	ld	(cptr),hl
+	call	bstrdt
+	call	gtoken
+	jr	datdcl8
+datdcl5.5:
+	push	hl
+	call	ptcod1		;put byte object
+	pop	hl
+	jr	datdcl4
+datdcl6:
+	cp	'#'
+	jr	z,$+6
+	cp	92h		;'word' ?
+	jr	nz,datdcl7
+	call	gtoken
+	call	wodcon		;word constant
+	call	ptcodw		;put word object
+	jr	datdcl8
+datdcl7:
+	cp	91h		;'byte' ?
+	call	z,gtoken
+	call	bytcon		;byte constant
+	ld	a,l
+	call	ptcod1		;put byte constant
+datdcl8:
+	ld	a,(tokcod)
+	cp	','
+	jp	z,datdcl1
+	cp	';'
+	jp	nz,synerr
+	ld	hl,datinl
+	ld	a,(hl)
+	ld	(hl),0
+	dec	a		;data declare ?
+	ld	hl,(skpadr)
+	call	z,ptcha		;put chain address
+	jp	gtoken
+;
+;	search symbol & table type check
+;
+symchk::
+	ld	hl,idetyp
+	call	seasym		;search symbol table
+	or	a		;found ?
+	jr	nz,symchk2
+	ld	a,(localf)
+	or	a
+	jr	nz,symchk1
+	call	ilenam
+	jr	symchk2
+symchk1:
+	ld	a,(idetyp)
+	bit	4,a
+	call	nz,ilenam
+symchk2:
+	ld	a,(localf)
+	or	a
+	ret	z
+	ld	a,10h
+	ret
+;
+;	** statement
+;
+statem::
+	ld	a,(tokcod)
+	dec	a		;identifier ?
+	jr	nz,statem2
+	ld	hl,(cptr)
+	ld	a,(hl)
+	cp	':'		;label ?
+	jr	nz,statem2
+	inc	hl
+	ld	a,(hl)
+	cp	'='
+	jr	z,statem2
+	ld	(cptr),hl
+	ld	hl,idetyp
+	call	seasym		;search symbol table
+	or	a		;found ?
+	jr	nz,statem1
+	ld	a,(idetyp)
+	bit	4,a		;global ?
+	jr	z,statem1
+	cp	98h		;undefined label ?
+	jr	z,statem0
+	call	ilelab
+	jr	statem1
+statem0:
+	ld	hl,(adrs)
+	call	ptcha		;put chain address
+statem1:
+	ld	hl,(cloc)
+	ld	(adrs),hl
+	ld	hl,idetyp
+	ld	(hl),18h
+	call	regsym		;symbol table register
+	call	gtoken
+statem2:
+	call	propt		;preset operand table pointer
+	ld	a,(tokcod)
+	ld	hl,stmcod
+	ld	bc,stmcode-stmcod
+	cpir			;search
+	jp	nz,idxopr
+	ld	a,stmcode-stmcod-1
+	sub	c
+	add	a,a
+	ld	c,a
+	ld	hl,stmadr
+	add	hl,bc
+	ld	e,(hl)
+	inc	hl
+	ld	d,(hl)
+	push	de
+	jp	gtoken
+stmcod:	defb	';%{'
+	defb	90h,96h,98h,9bh	;'inline','while','for','loop'
+	defb	93h,9eh,9dh,9ch	;'if','exit','goto','go'
+	defb	9fh,0a0h	;'return','stop'
+stmcode	equ	$
+;
+stmadr:	defw	dumstm,iclstm,comstm,inlstm
+	defw	whistm,forstm,lopstm,ifstm
+	defw	extstm,gotstm,gostm,retstm
+	defw	stpstm
+;
+; %include statement
+;
+;	%include d:filename.typ;
+iclstm::
+	cp	81h		;include ?
+	jr	nz,brkstm
+	call	inclu		;include file open
+	jp	gtoken
+;
+; %break statement
+;
+;	%break;
+brkstm::
+	cp	8bh		;break ?
+	jr	nz,tronst
+	call	gtoken
+	cp	';'
+	jp	nz,synerr
+	ld	a,(stmflg)
+	or	a		;statement compile ?
+	jp	z,synerr
+	call	pbreak
+	jp	gtoken
+;
+; %tron statement
+;
+;	%tron;
+tronst::
+	sub	85h		;tron ?
+	jr	nz,trofst
+	call	gtoken
+	cp	';'
+	jp	nz,synerr
+	call	tron		;trace on
+	jp	gtoken
+;
+; %troff statement
+;
+;	%troff;
+trofst::
+	dec	a		;troff ?
+	jp	nz,synerr
+	call	gtoken
+	cp	';'
+	jp	nz,synerr
+	call	troff		;trace off
+	jp	gtoken
+;
+; conpound. until statement
+;
+;	{  statement ...  }
+comstm::
+	call	pshlea
+	call	compou1
+;
+;	{  statement ...  } until exp ;
+	call	gtoken
+	cp	97h		;'until' ?
+	jr	nz,comstm1
+	call	propt
+	call	gtoken
+	call	expres		;expression
+	ld	a,0b7h		;"  OR	A  "
+	call	ptcod1
+	ld	hl,(lopadr)
+	ld	a,28h		;"  JR	Z,LOPADR  " or
+	call	ptjr
+	ld	a,0cah		;"  JP	Z,LOPADR  "
+	call	c,ptcod3
+comstm1:
+	call	poplea
+dumstm:
+	ret
+;
+compou::
+	call	gtoken
+compou1:
+	call	statem		;statement
+	ld	a,(tokcod)
+	cp	'}'
+	jr	nz,compou1
+	ret
+;
+; while statement
+;
+;	while  exp  { statement ... }
+whistm::
+	call	pshlea
+	call	expre		;expression
+	cp	'{'
+	jp	nz,synerr
+	ld	a,0b7h		;"  OR	A  "
+	call	ptcod1
+	ld	a,0cah		;"  JP	Z,0  "
+	ld	hl,0
+	call	ptcod3
+	ld	hl,(cloc)
+	dec	hl
+	dec	hl
+	ld	(extadr),hl
+	call	compou		;{  statement  ... }
+	ld	hl,(lopadr)
+	ld	a,18h		;"  JR	LOPADR  " or
+	call	ptjr
+	ld	a,0c3h
+	call	c,ptcod3	;"  JP  LOPADR  "
+	call	poplea
+	jp	gtoken
+;
+; for statement
+;
+;	for  var := exp_1  to  exp_2  by  exp_3  {  statement  ... }
+forstm::
+	dec	a		;identifier ?
+	jp	nz,synerr
+	ld	hl,idetyp
+	call	seasym		;search symbol table
+	or	a		;found ?
+	call	nz,misvar
+	ld	hl,idetyp
+	ld	a,(hl)
+	and	2fh
+	cp	2		;variable name ?
+	jp	nz,synerr
+	ld	bc,adrs-idetyp+2
+	call	blkpsh		;block push
+	ld	hl,idetyp
+	set	5,(hl)
+	call	regsym		;symbol table register
+	ld	bc,6
+	ld	hl,convar
+	call	blkpsh		;push convar,terpar,incper
+	ld	hl,(adrs)
+	ld	(convar),hl
+	call	gtoken
+	cp	0f0h		;':=' ?
+	jp	nz,synerr
+	call	gtoken
+	call	expre		;expression_1
+	cp	99h		;'to' ?
+	jp	nz,synerr
+	ld	a,32h		;"  LD	(CONVER),A  "
+	ld	hl,(convar)
+	call	ptcod3
+	call	gtoken
+	call	expre		;expression_2
+	ld	hl,(wloc)
+	push	hl
+	ld	(terpar),hl
+	call	forstm8
+	ld	a,32h		;"  LS  (TERPAR),A  "
+	dec	hl
+	call	ptcod3
+	ld	hl,0
+	ld	(incpar),hl
+	ld	a,(tokcod)
+	cp	'{'
+	jr	z,forstm1
+	cp	9ah		;'by' ?
+	jp	nz,synerr
+	call	gtoken
+	call	expre		;expression_3
+	cp	'{'
+	jp	nz,synerr
+	ld	hl,(wloc)
+	ld	(incpar),hl
+	call	forstm8
+	ld	a,32h		;"  LD  (INCPAR),A  "
+	dec	hl
+	call	ptcod3
+forstm1:
+	call	pshlea
+	ld	hl,(terpar)
+	call	stoptb		;opr1 = terminal parameter address
+	ld	hl,(convar)
+	call	stoptb		;opr2 = constant variable address
+	ld	hl,forobj1
+	call	codgen0		;code generate
+	ld	hl,(cloc)
+	dec	hl
+	dec	hl
+	ld	(extadr),hl
+	call	compou		; {  statement ... }
+	ld	hl,(incpar)
+	ld	a,h
+	or	l
+	jr	nz,forstm3
+	ld	hl,(convar)
+	ld	a,21h		;"  LD	HL,CONVAR  "
+	call	ptcod3
+	ld	a,34h		;"  INC	(HL)  "
+	call	ptcod1
+	ld	hl,(lopadr)
+	ld	a,20h		;"  JR	NZ,LOPADR  " or
+	call	ptjr
+	ld	a,0c2h		;"  JP	NZ,LOPADR  "
+	jr	forstm4
+forstm3:
+	call	stoptb		;opr1 = incremental parameter address
+	ld	hl,(convar)
+	call	stoptb		;opr2 = control variable address
+	ld	hl,forobj2
+	call	codgen0		;code generate
+	ld	hl,(lopadr)
+	ld	a,30h		;"  JR	NC,LOPADR  " or
+	call	ptjr
+	ld	a,0d2h		;"  JP	NC,LOPADR  "
+forstm4:
+	call	c,ptcod3
+	call	poplea
+	pop	hl
+	ld	(wloc),hl
+	ld	bc,6
+	ld	hl,convar
+	call	blkpop		;pop incpar,terpar,convar
+	ld	bc,adrs-idetyp+2
+	ld	hl,idetyp
+	call	blkpop		;block pop
+	ld	hl,idetyp
+	call	regsym		;symbol table register
+	jp	gtoken
+;
+forstm8:
+	inc	hl
+	ld	(wloc),hl
+	ex	de,hl
+	ld	hl,(dloc)
+	or	a
+	sbc	hl,de		; dloc >= wloc ?
+	ex	de,hl
+	ret	nc
+	ld	(dloc),hl
+	ret
+;
+forobj1:  defb	10
+	ld	a,(opr1w)
+	ld	hl,opr2w
+	sub	(hl)
+	jp	c,0
+forobj2:  defb	8
+	ld	a,(opr1w)
+	ld	hl,opr2w
+	add	a,(hl)
+	ld	(hl),a
+;
+; loop statement
+;
+;	   loop  var,  exp  {  statement ... }
+lopstm::
+	cp	'#'
+	jp	z,lopstb
+	dec	a
+	jp	nz,synerr
+	ld	hl,idetyp
+	call	seasym		;search symbol table
+	or	a		;found ?
+	call	nz,misvar
+	ld	hl,idetyp
+	ld	a,(hl)
+	and	2fh
+	cp	2		;variable name ?
+	jp	nz,synerr
+	ld	bc,adrs-idetyp+2
+	call	blkpsh		;block push
+	ld	hl,idetyp
+	set	5,(hl)
+	call	regsym		;symbol table register
+	ld	hl,(convar)
+	push	hl
+	ld	hl,(adrs)
+	ld	(convar),hl
+	call	gtoken
+	cp	','
+	jp	nz,synerr
+	call	gtoken
+	call	expre		;expression
+	cp	'{'
+	jp	nz,synerr
+	ld	a,32h		;"  LD  (CONVAR),A  "
+	ld	hl,(convar)
+	call	ptcod3
+	call	pshlea
+	call	compou		; { statement ...  }
+	ld	a,21h		;"  LD	HL,CONVAR  "
+	ld	hl,(convar)
+	call	ptcod3
+	ld	a,35h		;"  DEC	(HL)  "
+	call	ptcod1
+	ld	hl,(lopadr)
+	ld	a,20h		;"  JR	NZ,LOPADR  " or
+	call	ptjr
+	ld	a,0c2h
+	call	c,ptcod3	;"  JP  NZ,LOPADR  "
+	call	poplea
+	pop	hl
+	ld	(convar),hl
+	ld	bc,adrs-idetyp+2
+	ld	hl,idetyp
+	call	blkpop		;block pop
+	ld	hl,idetyp
+	call	regsym		;symbol table register
+	jp	gtoken
+;
+;	   loop  #,  exp  {  statement ... }
+;
+lopstb:
+	ld	hl,loopb
+	ld	a,(hl)
+	or	a
+	jp	nz,synerr
+	cpl
+	ld	(hl),a
+	call	gtoken
+	cp	','
+	jp	nz,synerr
+	call	gtoken
+	call	logexp		;expression
+	ld	b,a
+	ld	a,(optble)
+	dec	a
+	jp	nz,experr
+	ld	a,b
+	cp	'{'
+	jp	nz,synerr
+	ld	a,(iy-3)
+	or	a
+	jr	z,lopstb2
+	ld	hl,ldexa
+	dec	a
+	jr	z,lopstb1
+	ld	hl,ldbim
+	call	codgen		;code generate
+	jr	lopstb3
+lopstb1:
+	call	codgen		;code generate
+lopstb2:
+	ld	a,47h		;"  LD	B,A  "
+	call	ptcod1
+lopstb3:
+	call	pshlea
+	call	compou		; {  statement ... }
+	ld	hl,(lopadr)
+	ld	a,10h		;"  DJNZ  LOPADR  " or
+	call	ptjr
+	jr	nc,lopstb4
+	push	hl
+	ld	a,05h		;"  DEC	B  "
+	call	ptcod1
+	pop	hl
+	ld	a,0c2h		;"  JP	NZ,LOPADR "
+	call	ptcod3
+lopstb4:
+	xor	a
+	ld	(loopb),a
+	call	poplea
+	jp	gtoken
+;
+ldbim:	defb	2
+	ld	b,opr1b
+;
+;  if statement
+;
+;	   if  exp  then  statement_1 else statement
+ifstm::
+	ld	hl,(nxtadr)
+	push	hl
+	ld	hl,(skpadr)
+	push	hl
+	ld	hl,0
+	ld	(nxtadr),hl
+	ld	(skpadr),hl
+ifstm1:
+	call	expre		;expression
+	cp	94h		;'then' ?
+	jp	nz,synerr
+	ld	a,0b7h		;"  OR	A  "
+	call	ptcod1
+	ld	a,0cah		;"  JP	Z,0  "
+	ld	hl,0
+	call	ptcod3
+	ld	hl,(cloc)
+	dec	hl
+	dec	hl
+	ld	(skpadr),hl
+	call	gtoken
+	call	statem		;statement_1
+	ld	a,(tokcod)
+	cp	0bdh		;'elseif' ?
+	jr	z,ifstm4
+	cp	095h		;'else' ?
+	jr	z,ifstm2
+	ld	hl,(skpadr)
+	call	ptcha		;put chain address
+	jr	ifstm3
+ifstm2:
+	call	gtoken
+	cp	93h		;'if' ?
+	jr	z,ifstm4
+	call	ifstm5
+	call	statem		;statement_2
+ifstm3:
+	ld 	hl,(nxtadr)
+	ld	a,h
+	or	l
+	call	nz,ptcha	;put chain address
+	pop	hl
+	ld	(skpadr),hl
+	pop	hl
+	ld	(nxtadr),hl
+	ret
+ifstm4:
+	call	ifstm5
+	call	gtoken
+	jr	ifstm1
+;
+ifstm5:
+	ld	hl,(nxtadr)
+	ld	a,0c3h		;"  JP	NXTADR  "
+	call	ptcod3
+	ld	hl,(skpadr)
+	call	ptcha		;put chain address
+	ld	hl,(cloc)
+	dec	hl
+	dec	hl
+	ld	(nxtadr),hl
+	ret
+;
+; exit statement
+;
+;	   exit :
+extstm::
+	cp	';'
+	jp	nz,synerr
+	ld	a,0c3h		;"  JP	EXTADR  "
+	ld	hl,(extadr)
+	call	ptcod3
+	ld	hl,(cloc)
+	dec	hl
+	dec	hl
+	ld	(extadr),hl
+	jp	gtoken
+;
+; goto statement
+;
+;	  goto label;	go to label;
+gostm::
+	cp	99h		;'to' ?
+	jp	nz,synerr
+	call	gtoken
+gotstm::
+	dec	a
+	jp	nz,synerr
+	ld	hl,idetyp
+	call	seasym		;search symbol table
+	or	a		;found ?
+	jr	z,gotstm1
+	ld	a,98h
+	ld	(idetyp),a
+	ld	hl,0
+	ld	(adrs),hl
+	jr	gotstm2
+gotstm1:
+	ld	a,(idetyp)
+	ld	b,a
+	and	0fh
+	cp	8		;label ?
+	jp	nz,synerr
+	ld	hl,(adrs)
+	ld	a,b
+	add	a,a		;defined label ?
+	jr	c,gotstm2
+	ld	a,18h		;"  JR	LABEL   "  or
+	call	ptjr
+	ld	a,0c3h		;"  LP  LABEL   "
+	call	c,ptcod3
+	jr	gotstm3
+gotstm2:
+	ld	a,0c3h		;"  JP	LABEL  "
+	call	ptcod3
+	ld	hl,(cloc)
+	dec	hl
+	dec	hl
+	ld	(adrs),hl
+	ld	hl,idetyp
+	call	regsym		;symbol table register
+gotstm3:
+	call	gtoken
+	cp	';'
+	jp	nz,synerr
+	jp	gtoken
+;
+; return statement
+;
+;	   return ;
+retstm::
+	cp	';'
+	jp	nz,synerr
+	ld	a,(idxpsf)
+	or	a		;index push ?
+	jr	z,retstm1
+	ld	a,0c3h		;"  JP	RETJAD  "
+	ld	hl,(retjad)
+	call	ptcod3
+	ld	hl,(cloc)
+	dec	hl
+	dec	hl
+	ld	(retjad),hl
+	jr	retstm2
+retstm1:
+	ld	a,0c9h		;"  RET  "
+	call	ptcod1
+retstm2:
+	jp	gtoken
+;
+; stop statement
+;
+;	   stop ;
+stpstm::
+	cp	';'
+	jp	nz,synerr
+	ld	a,0c3h		;"  JP	@STOP  "
+	ld	hl,(codorg)
+	ld	de,@stop-@start
+	add	hl,de
+	call	ptcod3
+	jp	gtoken
+;
+;	**  put relative jump  **
+;
+ptjr::	 ;	a : op code
+	 ;	hl : jump address
+	push	hl
+	push	af
+	ld	de,(cloc)
+	inc	de
+	inc	de
+	or	a
+	sbc	hl,de		; hl := hl - $ + 2
+	pop	de
+	ld	e,l
+	ld	a,l
+	add	a,a
+	sbc	a,a
+	cp	h
+	pop	hl
+	jr	nz,ptjr1
+	call	ptcod2
+	or	a		; cy=0 : OK
+	ret
+ptjr1:
+	scf			; cy=1 : NG
+	ret
+;
+;	**  push loop adddress, exit jump address & preset  **
+;
+pshlea::
+	pop	ix
+	ld	hl,(lopadr)
+	push	hl
+	ld	hl,(extadr)
+	push	hl
+	ld	hl,0
+	ld	(extadr),hl
+	ld	hl,(cloc)
+	ld	(lopadr),hl
+	jp	(ix)
+;
+;	**  pop loop address, exit jump address  **
+;
+poplea::
+	pop	ix
+	ld	hl,(extadr)
+	ld	a,h
+	or	l
+	call	nz,ptcha	;put chain address
+	pop	hl
+	ld	(extadr),hl
+	pop	hl
+	ld	(lopadr),hl
+	jp	(ix)
+;
+;	**  index operation  **
+;
+idxopr::
+	ld	a,(tokcod)
+	sub	0a1h	   ;'set' or 'idx' or 'stx' or 'inx' or 'dex' ?
+	jp	c,expres
+	cp	5
+	jp	nc,expres
+	add	a,a
+	ld	e,a
+	ld	d,0
+	ld	hl,idopad
+	add	hl,de
+	ld	e,(hl)
+	inc	hl
+	ld	d,(hl)
+	push	de
+	jp	gtoken
+;
+idopad:	defw	idxset,ldx,stx,inx,dex
+;
+;	   set	index := const +- expression;
+;	   set	index := index +- expression;
+idxset::
+	sub	0bfh		;'ix' ?
+	jr	z,idxset1
+	cp	1		;'iy' ?
+	jp	nz,idxerr
+idxset1:
+	push	af
+	call	gtoken
+	cp	0f0h		;':=' ?
+	jp	nz,idxerr
+	call	gtoken
+	sub	0bfh		;'ix' ?
+	jr	z,idxset2
+	cp	1
+	jr	z,idxset2
+	call	wodcon
+	ld	a,2
+	jr	idxset3
+idxset2:
+	push	af
+	call	gtoken
+	pop	af
+idxset3:
+	pop	de
+	ld	e,a
+	ld	a,(tokcod)
+	cp	';'
+	jr	z,idxset7
+	cp	'+'
+	jr	z,idxset4
+	sub	'-'
+	jp	nz,idxerr
+idxset4:
+	push	af
+	push	de
+	push	hl
+	call	gtoken
+	call	expres		;expression
+	pop	hl
+	pop	de
+	push	de
+	call	idxset10
+	pop	de
+	dec	d
+	ld	d,0ddh		;index ix
+	jr	nz,$+4
+	ld	d,0fdh		;index iy
+	ld	e,19h
+	pop	af
+	push	de
+	or	a
+	jr	z,idxset5
+	ld	a,5fh		;"  LD	E,A  "
+	ld	hl,16h		;"  LD	D,0  "
+	call	ptcod3
+	jr	idxset6
+idxset5:
+	ld	de,2f5fh	;"  CPL  "
+	call	ptcod2		;"  LD	E,A  "
+	ld	a,16h		;"  LD	D,0FFH  "
+	ld	hl,13ffh	;"  INC	DE  "
+	call	ptcod3
+idxset6:
+	pop	de		;"  ADD	IX,DE  " or  "  ADD  IY,DE  "
+	jp	ptcod2
+idxset7:
+	call	idxset10
+	jp	gtoken
+;
+idxset10:
+	ld	a,e
+	cp	d
+	ret	z
+	or	a		;' iy := ix ' ?
+	jr	nz,idxset11
+	ld	de,0dde5h	;"  PUSH  IX  "
+	call	ptcod2
+	ld	de,0fde1h	;"  POP  IY  "
+	jp	ptcod2
+idxset11:
+	dec	a
+	jr	nz,idxset12
+	ld	de,0fde5h	;"  PUSH  IY  "
+	call	ptcod2
+	ld	de,0dde1h	;"  POP	IX  "
+	jp	ptcod2
+idxset12:
+	dec	d
+	ld	a,0ddh
+	jr	nz,$+4
+	ld	a,0fdh
+	push	hl
+	call	ptcod1
+	pop	hl
+	ld	a,21h		;"  LD	IX,nn  "  or  "  LD  IY,nn  "
+	jp	ptcod3
+;
+;	  ldx  index := var[ exp ];
+ldx::
+	ld	d,0ddh
+	sub	0bfh		;'ix' ?
+	jr	z,ldx1
+	ld	d,0fdh
+	dec	a		;'iy' ?
+	jp	nz,idxerr
+ldx1:
+	push	de
+	call	gtoken
+	cp	0f0h		;':=' ?
+	jp	nz,idxerr
+	call	gtoken
+	dec	a
+	jp	nz,idxerr
+	ld	hl,idetyp
+	call	seasym		;search symbol table
+	or	a		;found ?
+	call	nz,misvar
+	ld	hl,(adrs)
+	ld	a,(idetyp)
+	and	0fh
+	sub	2		;variable name ?
+	jr	z,ldx2
+	dec	a		;data name ?
+	jp	nz,idxerr
+ldx2:
+	push	hl
+	call	gtoken
+	cp	'['
+	jr	nz,ldx6
+	call	gtoken
+	call	logexp		;expression
+	ld	a,(optble)
+	dec	a
+	jp	nz,experr
+	ld	a,(tokcod)
+	cp	']'
+	jp	nz,idxerr
+	call	gtoken
+	ld	a,(iy-3)
+	cp	2		;constant ?
+	jr	z,ldx5
+	or	a		;expression ?
+	jr	z,ldx3
+	ld	hl,ldxobj1
+	call	codgen		;code generate
+ldx3:
+
+	pop	hl
+	call	stoptb		;store oprand table
+	ld	hl,ldxobj2
+	call	codgen
+	pop	de
+	ld	e,0e1h		;"  POP   IX  " or  "POP   IY "
+	call	ptcod2
+	jr	ldx7
+ldx5:
+	pop	hl
+	ld	a,(iy-2)
+	add	a,l
+	ld	l,a
+	jr	nc,$+3
+	inc	h		;hl := hl + opr
+	defb	0feh		;skip 1 byte
+ldx6:
+	pop	hl
+	ex	(sp),hl
+	ex	de,hl
+	ld	e,2ah		;"  LD  IX,(nn)  " or "  LD  IY,(nn)  "
+	call	ptcod2
+	pop	hl
+	call	ptcodw
+ldx7:
+	ld	a,(tokcod)
+	cp	';'
+	jp	z,gtoken
+	jp	idxerr		;error : bad index operation
+;
+ldxobj1: defb	3
+	ld	a,(opr1w)
+;
+ldxobj2: defb	11
+	ld	e,a
+	ld	d,0
+	ld	hl,opr1w
+	add	hl,de
+	ld	e,(hl)
+	inc	hl
+	ld	d,(hl)
+	push	de
+;
+;	   stx  var[  exp  ] := index;
+stx::
+	dec	a
+	jp	nz,idxerr
+	ld	hl,idetyp
+	call	seasym		;search symbol table
+	or	a
+	call	nz,misvar
+	ld	hl,(adrs)
+	ld	a,(idetyp)
+	and	0fh
+	cp	2		;variable name ?
+	jp	nz,idxerr
+	push	hl
+	call	gtoken
+	cp	'['
+	jr	nz,stx3
+	call	gtoken
+	call	logexp		;expression
+	ld	a,(optble)
+	dec	a
+	jp	nz,experr
+	ld	a,(tokcod)
+	cp	']'
+	jp	nz,idxerr
+	ld	a,(iy-3)
+	cp	2		;conatant ?
+	jr	z,stx2
+	or	a		;expression ?
+	jr	z,stx1
+	ld	hl,ldxobj1
+	call	codgen		;code generate
+stx1:
+	pop	hl
+	call	stoptb		;store operand table
+	ld	hl,stxobj1
+	call	codgen
+	call	gtoken
+	cp	0f0h		;':=' ?
+	jp	nz,idxerr
+	call	gtoken
+	ld	d,0ddh		;index ix
+	cp	0bfh
+	jr	z,$+4
+	  ld	d,0fdh		;index iy
+	ld	e,0e5h		;"  PUSH  IX " or "  PUSH  IY  "
+	call	ptcod2
+	ld	hl,stxobj2
+	call	codgen
+	jr	stx4
+stx2:
+	pop	hl
+	ld	a,(iy-2)
+	add	a,l
+	ld	l,a
+	jr	nc,$+3
+	inc	h		;hl := hl + opr
+	push	hl
+	call	gtoken
+stx3:
+	cp	0f0h		;':=' ?
+	jp	nz,idxerr
+	call	gtoken
+	ld	d,0ddh		;index ix
+	cp	0bfh
+	jr	z,$+4
+	ld	d,0fdh		;index iy
+	ld	e,22h
+	call	ptcod2
+	pop	hl
+	call	ptcodw
+stx4:
+	call	gtoken
+	cp	';'
+	jp	z,gtoken
+	jp	idxerr
+;
+stxobj1: defb	7
+	ld	e,a
+	ld	d,0
+	ld	hl,opr1w
+	add	hl,de
+;
+stxobj2: defb	4
+	pop	de
+	ld	(hl),e
+	inc	hl
+	ld	(hl),d
+;
+;	   inx	index;
+inx::
+	ld	e,23h
+	defb	21h		;skip 2 byte
+;
+;	   dex	index;
+dex::
+	ld	e,2bh
+	ld	d,0ddh		;index ix
+	cp	0bfh
+	jr	z,$+4
+	ld	d,0fdh		;index iy
+	call	ptcod2
+	jr	stx4
+;
+;	**  expression  **
+;
+expres::
+	call	expr0
+	cp	';'
+	jp	z,gtoken
+	jp	experr		;error : bad expression
+;
+expre::
+	call	propt		;preset operand table pointer
+expr0:
+	call	expr2		;make expression object
+	ld	a,(optble)	;check
+	dec	a
+	jp	nz,experr
+	ld	a,(tokcod)
+	ret
+;
+expr1:
+	xor	a
+	ld	(puhptf),a
+expr2:
+	call	logexp		;logical expression
+;
+expr5:
+	ld	a,(iy-3)
+	or	a
+	ret	z
+	ld	hl,ldexa
+	dec	a
+	jr	z,expr6
+	ld	hl,xora
+	ld	a,(iy-2)
+	or	a		;zero ?
+	jr	z,expr6
+	ld	hl,ldime
+expr6:
+	jp	codgen		;code generate
+;
+ldexa:	defb	-3
+	ld	a,(opr1w)
+ldime:	defb	-2
+	ld	a,opr1b
+xora:	defb	-1
+	xor	a
+;
+;  logical expression
+;
+logexp::
+	call	logtem0		;logical term
+logexp1:
+	ld	a,(tokcod)
+	cp	0a6h		;'xor' ?
+	jr	z,logexp6
+	cp	0a7h		;'or' ?
+	jr	z,logexp4
+	cp	'!'
+	jr	z,logexp4
+	cp	'|'
+	ret	nz
+;
+;	   opr1 := opr1 | opr2
+logexp4:
+	call	logtem		;logical term
+	ld	hl,orobj
+	call	dyagen		;code generate
+	jr	nc,logexp1
+	ld	a,(iy-2)
+	or	(iy+1)
+	ld	(iy-2),a	;m(iy-2) := m(iy-2) | m(iy+1)
+	jr	logexp1
+;
+;	   opr1 := opr1 xor opr2
+logexp6:
+	call	logtem
+	ld	hl,xorobj
+	call	dyagen		;code generate
+	jr	nc,logexp1
+	ld	a,(iy-2)
+	xor	(iy+1)
+	ld	(iy-2),a	;m(iy-2) := m(iy-2) xor m(iy+1)
+	jr	logexp1
+;
+;  -- or object --
+;
+orobj:	defw	oree,orev,orec
+	defw	orve,orvv,orvc
+	defw	orce,orcv
+oree:	defb	2
+	pop	de
+	or	d
+
+orev:	defb	4
+	ld	hl,opr2w
+	or	(hl)
+
+orec:	defb	2
+	or	opr2b
+
+orve:	defb	4
+	ld	hl,opr1w
+	or	(hl)
+
+orvv:	defb	-7
+	ld	a,(opr1w)
+	ld	hl,opr2w
+	or	(hl)
+
+orvc:	defb	-5
+	ld	a,(opr1w)
+	or	opr2b
+
+orce:	defb	2
+	or	opr1b
+
+orcv:	defb	-5
+	ld	a,(opr2w)
+	or	opr1b
+;
+;  --  exclusive or object  --
+;
+xorobj: defw	xoree,xorev,xorec
+	defw	xorve,xorvv,xorvc
+	defw	xorce,xorcv
+
+xoree:	defb	2
+	pop	de
+	xor	d
+
+xorev:	defb	4
+	ld	hl,opr2w
+	xor	(hl)
+
+xorec:	defb	2
+	xor	opr2b
+
+xorve:	defb	4
+	ld	hl,opr1w
+	xor	(hl)
+
+xorvv:	defb	-7
+	ld	a,(opr1w)
+	ld	hl,opr2w
+	xor	(hl)
+
+xorvc:	defb	-5
+	ld	a,(opr1w)
+	xor	opr2b
+
+xorce:	defb	2
+	xor	opr1b
+
+xorcv:	defb	-5
+	ld	a,(opr2w)
+	xor	opr1b
+
+;
+;  logical term
+;
+logtem::
+	call	gtoken		;get next token
+logtem0:
+	call	logfac0		;logical factor
+logtem1:
+	ld	a,(tokcod)
+	cp	0a8h		;'and' ?
+	jr	z,logtem2
+	cp	'&'
+	ret	nz
+;
+;	   opr1 := opr1 & opr2
+logtem2:
+	call	logfac		;logical factor
+	ld	hl,andobj
+	call	dyagen		;code generate
+	jr	nc,logtem1
+	ld	a,(iy-2)
+	and	(iy+1)
+	ld	(iy-2),a	;m(iy-2) := m(iy-2) & m(iy+1)
+	jr	logtem1
+;
+;  --  and object  --
+;
+andobj:	defw	andee,andev,andec
+	defw	andve,andvv,andvc
+	defw	andce,andcv
+
+andee:	defb	2
+	pop	de
+	and	d
+
+andev:	defb	4
+	ld	hl,opr2w
+	and	(hl)
+
+andec:	defb	2
+	and	opr2b
+
+andve:	defb	4
+	ld	hl,opr1w
+	and	(hl)
+
+andvv:	defb	-7
+	ld	a,(opr1w)
+	ld	hl,opr2w
+	and	(hl)
+
+andvc:	defb	-5
+	ld	a,(opr1w)
+	and	opr2b
+
+andce:	defb	2
+	and	opr1b
+	
+andcv:	defb	-5
+	ld	a,(opr2w)
+	and	opr1b
+
+;
+;  logical factor
+;
+logfac::
+	call	gtoken		;get next token
+logfac0:
+	ld	a,(tokcod)
+	cp	0a9h		;'not' ?
+	jr	z,logfac1
+	cp	'^'
+	jr	z,logfac1
+	cp	'~'
+	jr	nz,relexp	;relational expression
+;
+;	   opr := ^ opr
+logfac1:
+	call	gtoken		;get next token
+	call	relexp		;relational expression
+	ld	a,(iy-3)
+	or	a
+	jr	z,logfac3
+	dec	a		;variable ?
+	jr	z,logfac2
+	ld	a,(iy-2)
+	cpl
+	ld	(iy-2),a	;m(iy-2) := ^m(iy-2)
+	ret
+logfac2:
+	ld	hl,notobj
+	jp	codgen		;code generate
+logfac3:
+	ld	a,2fh		;"  CPL  "
+	jp	ptcod1
+;
+;  --- not object  --
+;
+notobj:	defb	-4
+	ld	a,(opr1w)
+	cpl
+;
+;  relational expression
+;
+relexp::
+	call	ariexp0		;arithmetic expression
+	ld	a,(tokcod)
+	cp	'='
+	jr	z,relexp50
+	cp	0f3h		;'<>' ?
+	jr	z,relexp40
+	cp	'>'
+	jr	z,relexp30
+	cp	0f4h		;'>=' ?
+	jr	z,relexp20
+	cp	'<'
+	jr	z,relexp10
+	cp	0f2h		;'<=' ?
+	ret	nz
+;
+;	   opr1 := opr1 <= opr2
+relexp1:
+	call	ariexp		;arithmetic expression
+	call	oprexc		;exchange
+	call	subtra
+	jr	relexp21
+;
+;	   opr1 := opr1 < opr2
+relexp10:
+	call	ariexp
+	call	subtra
+	jr	relexp31
+;
+;	   opr1 := opr1 >= opr2
+relexp20:
+	call	ariexp
+	call	subtra
+	defb	06h		;skip 1 byte
+relobj3:
+	defb	2
+relexp21:
+	ccf
+	sbc	a,a
+	ld	hl,relobj3
+	jr	relexp60
+;
+;	   opr1 := opr1 > opr2
+relexp30:
+	call	ariexp
+	call	oprexc		;exchange
+	call	subtra
+	defb	06h		;skip 1 byte
+relobj2:
+	defb	1
+relexp31:
+	sbc	a,a
+	ld	hl,relobj2
+	jr	relexp60
+;
+;	   opr1 := opr1 <> opr2
+relexp40:
+	call	ariexp
+	call	subtra
+	defb	06h		;skip 1 byte
+relobj1:
+	defb	4
+	jr	z,$+4		;if opr1 <> opr2
+	ld	a,0ffh		;  then  a := 0ffh else a := 0
+	ld	hl,relobj1
+	jr	relexp60
+;
+;	   opr1 := opr1 = opr2
+relexp50:
+	call	ariexp
+	call	subtra
+	defb	06h		;skip 1 byte
+relobj0:
+	defb	5
+	jr	z,$+4		;if opr1 = opr2
+	ld	a,0ffh		;  then a := 0ffh
+	cpl			;  else a := 0
+	ld	hl,relobj0
+;
+relexp60:
+	ld	b,a
+	ld	a,(iy-3)
+	or	a
+	jp	z,codgen	;code generate
+	ld	(iy-2),b
+	ret
+;
+;  arithmetic expression
+;
+ariexp::
+	call	gtoken		;get next token
+ariexp0:
+	call	term0		;term
+ariexp1:
+	ld	a,(tokcod)
+	cp	'+'
+	jr	z,ariexp5
+	cp	'-'
+	jr	z,ariexp4
+	cp	0aah		;'plus' ?
+	jr	z,ariexp3
+	cp	0abh		;'minus' ?
+	ret	nz
+;
+;	     opr1 := opr1  minus opr2
+ariexp2:
+	call	term
+	ld	hl,minobj
+	call	dyagen		;code generate
+	jr	nc,ariexp1
+	ld	hl,mincc
+	call	codgen0
+	jr	ariexp1
+;
+;	   opr1 := opr1 plus opr2
+;
+ariexp3:
+	call	term
+	ld	hl,pluobj
+	call	dyagen		;code generate
+	jr	nc,ariexp1
+	ld	hl,plucc
+	call	codgen0		;code generate
+	jr	ariexp1
+;
+;	   opr1 := opr1 - opr2
+ariexp4:
+	call	term
+	call	subtra
+	jr	ariexp1
+subtra:
+	ld	hl,subobj
+	call	dyagen		;code generate
+	ret	nc
+	ld	a,(iy-2)
+	sub	(iy+1)
+	ld	(iy-2),a	;m(iy-2) := m(iy-2) - m(iy+1)
+	ret
+;
+;	   opr1 := opr1 + opr2
+ariexp5:
+	call	term
+	ld	hl,addobj
+	call	dyagen		;code generate
+	jr	nc,ariexp1
+	ld	a,(iy-2)
+	add	a,(iy+1)
+	ld	(iy-2),a	;m(iy-2) := m(iy-2) + m(iy+1)
+	jr	ariexp1
+;
+;  --  minus object  --
+;
+minobj:	defw	minee,minev,minec
+	defw	minve,minvv,minvc
+	defw	mince,mincv
+
+minee:	defb	3
+	ld	d,a
+	pop	af
+	sbc	a,d
+
+minev:	defb	4
+	ld	hl,opr2w
+	sbc	a,(hl)
+
+minec:	defb	2
+	sbc	a,opr2b
+
+minve:	defb	5
+	ld	d,a
+	ld	a,(opr1w)
+	sbc	a,d
+
+minvv:	defb	-7
+	ld	a,(opr1w)
+	ld	hl,opr2w
+	sbc	a,(hl)
+
+minvc:	defb	-5
+	ld	a,(opr1w)
+	sbc	a,opr2b
+
+mince:	defb	4
+	ld	d,a
+	ld	a,opr1b
+	sbc	a,d
+
+mincv:	defb	-6
+	ld	a,opr1b
+	ld	hl,opr2w
+	sbc	a,(hl)
+
+mincc:	defb	-4
+	ld	a,opr1b
+	sbc	a,opr2b
+
+;
+; -- plus object
+;
+pluobj:	defw	pluee,pluev,pluec
+	defw	pluve,pluvv,pluvc
+	defw	pluce,plucv
+
+pluee:	defb	2
+	pop	de
+	adc	a,d
+
+pluev:	defb	4
+	ld	hl,opr2w
+	adc	a,(hl)
+
+pluec:	defb	2
+	adc	a,opr2b
+
+pluve:	defb	4
+	ld	hl,opr1w
+	adc	a,(hl)
+
+pluvv:	defb	-7
+	ld	a,(opr1w)
+	ld	hl,opr2w
+	adc	a,(hl)
+
+pluvc:	defb	-5
+	ld	a,(opr1w)
+	adc	a,opr2b
+
+pluce:	defb	2
+	adc	a,opr2b
+
+plucv:	defb	-5
+	ld	a,(opr2w)
+	adc	a,opr1b
+
+plucc:	defb	-4
+	ld	a,opr1b
+	adc	a,opr2b
+;
+;  --  subtract object  --
+;
+subobj:	defw	subee,subev,subec
+	defw	subve,subvv,subvc
+	defw	subce,subcv
+
+subee:	defb	3
+	ld	d,a
+	pop	af
+	sub	d
+
+subev:	defb	4
+	ld	hl,opr2w
+	sub	(hl)
+
+subec:	defb	2
+	sub	opr2b
+
+subve:	defb	5
+	ld	d,a
+	ld	a,(opr1w)
+	sub	d
+
+subvv:	defb	-7
+	ld	a,(opr1w)
+	ld	hl,opr2w
+	sub	(hl)
+
+subvc:	defb	-5
+	ld	a,(opr1w)
+	sub	opr2b
+
+subce:	defb	4
+	ld	d,a
+	ld	a,opr1b
+	sub	d
+
+subcv:	defb	-6
+	ld	a,opr1b
+	ld	hl,opr2w
+	sub	(hl)
+;
+;  --  add object  --
+;
+addobj:	defw	addee,addev,addec
+	defw	addve,addvv,addvc
+	defw	addce,addcv
+
+addee:	defb	2
+	pop	de
+	add	a,d
+
+addev:	defb	4
+	ld	hl,opr2w
+	add	a,(hl)
+
+addec:	defb	2
+	add	a,opr2b
+
+addve:	defb	4
+	ld	hl,opr1w
+	add	a,(hl)
+
+addvv:	defb	-7
+	ld	a,(opr1w)
+	ld	hl,opr2w
+	add	a,(hl)
+
+addvc:	defb	-5
+	ld	a,(opr1w)
+	add	a,opr2b
+
+addce:	defb	2
+	add	a,opr1b
+
+addcv:	defb	-5
+	ld	a,(opr2w)
+	add	a,opr1b
+
+;
+;  term
+;
+term::
+	call	gtoken		;get next token
+term0:
+	call	factor0		;factor
+term1:
+	ld	a,(tokcod)
+	cp	'*'
+	jr	z,term6
+	cp	'/'
+	jr	z,term5
+	cp	'%'
+	jr	z,term4
+	cp	0f1h		;'<<' ?
+	jr	z,term3
+	cp	0f5h		;'>>' ?
+	ret	nz
+;
+;	   opr1 := opr1 >> opr2
+term2:
+	call	factor
+	ld	hl,shrobj
+	call	dyagen		;code generate
+	jr	nc,term1
+	ld	a,(iy-2)
+	ld	d,(iy+1)
+	call	@shr.r
+	ld	(iy-2),a	; m(iy-2) := m(iy-2) >> m(iy+1)
+	jr	term1
+;
+;	   opr1 := opr1 << opr2
+term3:
+	call	factor
+	ld	hl,shlobj
+	call	dyagen		;code generate
+	jr	nc,term1
+	ld	a,(iy-2)
+	ld	d,(iy+1)
+	call	@shl.r
+	ld	(iy-2),a	; m(iy-2) := m(iy-2) << m(iy+1)
+	jr	term1
+;
+;	   opr1 := opr1 % opr2
+term4:
+	call	factor
+	ld	hl,remobj
+	call	dyagen		;code generate
+	jr	nc,term1
+	ld	a,(iy-2)
+	ld	d,(iy+1)
+	call	@rem.r
+	ld	(iy-2),a	;m(iy-2) := m(iy-2) % m(iy+1)
+	jr	term1
+;
+;	   opr1 := opr1 / opr2
+term5:
+	call	factor
+	ld	hl,divobj
+	call	dyagen		;code generate
+	jr	nc,term1
+	ld	a,(iy-2)
+	ld	d,(iy+1)
+	call	@div.r
+	ld	(iy-2),a	;m(iy-2) := m(iy-2) / m(iy+1)
+	jr	term1
+;
+;	   opr1 := opr1 * opr2
+term6:
+	call	factor
+	ld	hl,mulobj
+	call	dyagen		;code generate
+	jp	nc,term1
+	ld	a,(iy-2)
+	ld	d,(iy+1)
+	call	@mul.r
+	ld	(iy-2),a	;m(iy-2) := m(iy-2) * m(iy+1)
+	jp	term1
+;
+;   -  shift right object  --
+;
+shrobj:	defw	shree,shrev,shrec
+	defw	shrve,shrvv,shrvc
+	defw	shrce,shrcv
+
+shree:	defb	5
+	ld	d,a
+	pop	af
+	call	@shr.r-@start
+
+shrev:	defb	6
+	ld	hl,opr2w
+	call	@shr.m-@start
+
+shrec:	defb	5
+	ld	d,opr2b
+	call	@shr.r-@start
+
+shrve:	defb	7
+	ld	d,a
+	ld	a,(opr1w)
+	call	@shr.r-@start
+
+shrvv:	defb	-9
+	ld	a,(opr1w)
+	ld	hl,opr2w
+	call	@shr.m-@start
+
+shrvc:	defb	-8
+	ld	a,(opr1w)
+	ld	d,opr2b
+	call	@shr.r-@start
+
+shrce:	defb	6
+	ld	d,a
+	ld	a,opr1b
+	call	@shr.r-@start
+
+shrcv:	defb	-8
+	ld	a,opr1b
+	ld	hl,opr2w
+	call	@shr.m-@start
+
+;
+;  --  shift left object  --
+;
+shlobj:	defw	shlee,shlev,shlec
+	defw	shlve,shlvv,shlvc
+	defw	shlce,shlcv
+
+shlee:	defb	5
+	ld	d,a
+	pop	af
+	call	@shl.r-@start
+
+shlev:	defb	6
+	ld	hl,opr2w
+	call	@shl.m-@start
+
+shlec:	defb	5
+	ld	d,opr2b
+	call	@shl.r-@start
+
+shlve:	defb	7
+	ld	d,a
+	ld	a,(opr1w)
+	call	@shl.r-@start
+
+shlvv:	defb	-9
+	ld	a,(opr1w)
+	ld	hl,opr2w
+	call	@shl.m-@start
+
+shlvc:	defb	-8
+	ld	a,(opr1w)
+	ld	d,opr2b
+	call	@shl.r-@start
+
+shlce:	defb	6
+	ld	d,a
+	ld	a,opr1b
+	call	@shl.r-@start
+
+shlcv:	defb	-8
+	ld	a,opr1b
+	ld	hl,opr2w
+	call	@shl.m-@start
+
+
+;
+;  --  reminder object  --
+;
+remobj:	defw	remee,remev,remec
+	defw	remve,remvv,remvc
+	defw	remce,remcv
+
+remee:	defb	5
+	ld	d,a
+	pop	af
+	call	@rem.r-@start
+
+remev:	defb	6
+	ld	hl,opr2w
+	call	@rem.m-@start
+
+remec:	defb	5
+	ld	d,opr2b
+	call	@rem.r-@start
+
+remve:	defb	7
+	ld	d,a
+	ld	a,(opr1w)
+	call	@rem.r-@start
+
+remvv:	defb	-9
+	ld	a,(opr1w)
+	ld	hl,opr2w
+	call	@rem.m-@start
+
+remvc:	defb	-8
+	ld	a,(opr1w)
+	ld	d,opr2b
+	call	@rem.r-@start
+
+remce:	defb	6
+	ld	d,a
+	ld	a,opr1b
+	call	@rem.r-@start
+
+remcv:	defb	-8
+	ld	a,opr1b
+	ld	hl,opr2w
+	call	@rem.m-@start
+
+
+;
+;  --  divide object  --
+;
+divobj:	defw	divee,divev,divec
+	defw	divve,divvv,divvc
+	defw	divce,divcv
+
+divee:	defb	5
+	ld	d,a
+	pop	af
+	call	@div.r-@start
+
+divev:	defb	6
+	ld	hl,opr2w
+	call	@div.m-@start
+
+divec:	defb	5
+	ld	d,opr2b
+	call	@div.r-@start
+
+divve:	defb	7
+	ld	d,a
+	ld	a,(opr1w)
+	call	@div.r-@start
+
+divvv:	defb	-9
+	ld	a,(opr1w)
+	ld	hl,opr2w
+	call	@div.m-@start
+
+divvc:	defb	-8
+	ld	a,(opr1w)
+	ld	d,opr2b
+	call	@div.r-@start
+
+divce:	defb	6
+	ld	d,a
+	ld	a,opr1b
+	call	@div.r-@start
+
+divcv:	defb	-8
+	ld	a,opr1b
+	ld	hl,opr2w
+	call	@div.m-@start
+
+
+;
+;  --  multiply object  --
+;
+mulobj:	defw	mulee,mulev,mulec
+	defw	mulve,mulvv,mulvc
+	defw	mulce,mulcv
+
+mulee:	defb	4
+	pop	de
+	call	@mul.r-@start
+
+mulev:	defb	6
+	ld	hl,opr2w
+	call	@mul.m-@start
+
+mulec:	defb	5
+	ld	d,opr2b
+	call	@mul.r-@start
+
+mulve:	defb	6
+	ld	hl,opr1w
+	call	@mul.m-@start
+
+mulvv:	defb	-9
+	ld	a,(opr1w)
+	ld	hl,opr2w
+	call	@mul.m-@start
+
+mulvc:	defb	-8
+	ld	a,(opr1w)
+	ld	d,opr2b
+	call	@mul.r-@start
+
+mulce:	defb	5
+	ld	d,opr1b
+	call	@mul.r-@start
+
+mulcv:	defb	-8
+	ld	a,(opr2w)
+	ld	d,opr1b
+	call	@mul.r-@start
+
+;
+;  factor
+;
+factor::
+	call	gtoken		;get next token
+factor0:
+	ld	a,(tokcod)
+	cp	'+'
+	jr	z,factor5
+	cp	'-'
+	jr	nz,expr
+	call	factor5
+	ld	a,(iy-3)
+	or	a		;expression ?
+	jr	z,factor2
+	dec	a		;variable ?
+	jr	z,factor1
+	ld	a,(iy-2)
+	neg
+	ld	(iy-2),a	;m(iy-2) := -m(iy-2)
+	ret
+factor1:
+	ld	hl,$+6
+	jp	codgen
+	;-----------------------+
+	defb	-5		;
+	ld	a,(opr1w)	; neg object
+	neg			;
+	;-----------------------+
+factor2:
+	ld	de,0ed44h	;"  NEG  "
+	jp	ptcod2
+
+;
+factor5:
+	call	gtoken		;get next token
+;
+;	    (  expression  )
+expr::
+	cp	'('
+	jr	nz,fun?
+	call	gtoken		;get next token
+exprx:
+	call	logexp		;expression
+exprx1:
+	cp	','
+	jr	nz,expry
+	call	expr5
+	call	decopt		;iy := iy - 3 ; dec(optble)
+	call	gtoken
+	call	expr1		;expression
+	ld	a,(tokcod)
+	jr	exprx1
+chkpar:
+	ld	a,(tokcod)
+expry:
+	cp	')'
+	jp	nz,experr
+	jp	gtoken
+;
+;	    ?( exp_1 : exp_2, exp_3 )
+fun?::
+	cp	'?'
+	jr	nz,memor
+;
+	call	gtoken		;get next token
+	cp	'('
+	jp	nz,experr
+	call	gtoken
+	call	expr2		;expression_1
+	ld	a,(tokcod)
+	cp	';'
+	jp	nz,experr
+	ld	a,0b7h		;"  OR	A  "
+	call	ptcod1
+	inc	hl
+	push	hl
+	ld	a,0cah
+	ld	hl,0		;"L1:  JP  Z,0  "
+	call	ptcod3
+	call	gtoken
+	call	expr1		;expression_2
+	call	decopt		; iy := iy - 3 : dec(optble)
+	ld	a,(tokcod)
+	cp	','
+	jp	nz,experr
+	ld	a,0c3h
+	ld	hl,0		;"L2:  JP  0  "
+	call	ptcod3
+	dec	hl
+	dec	hl
+	ex	(sp),hl
+	call	ptcha		;"  chain L1+1 "
+	call	gtoken
+	call	expr1		;expression_3
+	call	decopt		; iy := iy - 3 : dec(optble)
+	pop	hl
+	call	ptcha		;"  chain L2+1  "
+	jr	chkpar
+;
+;	    memory[ exp_1, exp_2 ] := exp_3
+memor::
+	cp	0b9h		;'memory' ?
+	jr	z,$+7
+	cp	'@'
+	jp	nz,port
+;
+	call	gtoken
+	cp	'['
+	jp	nz,experr
+	call	gtoken
+	cp	0bfh		;'ix' ?
+	jr	z,memor2
+	cp	0c0h		;'iy' ?
+	jr	z,memor3
+;
+	call	expr2		;expression_1
+	call	decopt		; iy := iy - 3 : dec(optble)
+	ld	a,(tokcod)
+	cp	','
+	jp	nz,experr
+	call	gtoken
+	ld	a,0f5h		;" PUSH  AF"
+	call	ptcod1
+	call	expr1		;expression_2
+	ld	a,(tokcod)
+	cp	']'
+	jp	nz,experr
+	ld	de,0e16fh	;"  POP  HL "
+	call	ptcod2		;"  LD   L,A  "
+	call	gtoken
+	cp	0f0h		;':=' ?
+	jr	nz,memor1
+	call	decopt		; iy := iy - 3 : dec(optble)
+	ld	a,0e5h		;"  PUSH  HL "
+	call	ptcod1
+	call	gtoken
+	call	expr1		;expression_3
+	ld	de,0e177h	;"  POP	HL "
+	jp	ptcod2		;"  LD  (HL),A "
+;
+;	   memory[ exp_1, exp_2 ]
+memor1:
+	ld	a,7eh		;"  LD	A,(HL)  "
+	jp	ptcod1
+;
+;	   memory[ index +-, const ] := exp_1
+memor2:
+	ld	a,0ddh		;index register ix
+	defb	21h
+memor3:
+	ld	a,0fdh		;index register iy
+	push	af
+	call	gtoken
+	cp	'+'		;auto increment ?
+	jr	z,memor5
+	cp	'-'		;auto decrement ?
+	jr	z,memor4
+	ld	l,0
+	cp	','
+	jr	z,memor6
+	ld	h,0
+	cp	']'
+	jr	z,memor10
+	jp	experr
+memor4:
+	ld	l,2bh		;decrement
+	defb	11h		; 2 byte skip
+memor5:
+	ld	l,23h		;increment
+	push	hl
+	call	gtoken
+	pop	hl
+	ld	h,0
+	cp	']'
+	jr	z,memor10
+	cp	'.'
+	jp	nz,experr
+memor6:
+	push	hl
+	call	gtoken
+	cp	'+'
+	jr	z,memor7
+	cp	'-'
+	jr	nz,memor8
+	defb	0feh		;reset z flag & 1 byte skip
+memor7:
+	xor	a		;set z flag
+	push	af
+	call	gtoken
+	pop	af
+	defb	0eh		;1 byte skip
+memor8:
+	xor	a		;set z flag
+	push	af
+	call	bytcon		;byte constant
+	pop	af
+	jr	z,memor9
+	xor	a
+	sub	l
+	ld	l,a		; l := 0 - 1
+	sbc	a,a
+memor9:
+	bit	7,l		;check l = -128...+127 ?
+	jr	z,$+3
+	cpl
+	or	a
+	call	nz,ilcnds
+	pop	de
+	ld	d,l
+	ex	de,hl
+	ld	a,(tokcod)
+	cp	']'
+	jp	nz,experr
+memor10:
+	push	hl
+	call	gtoken
+	cp	0f0h		;':=' ?
+	jr	nz,memor11
+	call	gtoken
+	call	expr2		;expression_1
+	pop	hl
+	pop	de
+	ld	a,d
+	push	de
+	push	hl
+	ld	l,77h		;"  LD  (IX+d),A " or "  LD  (IY+d),A  "
+	call	ptcod3
+	pop	hl
+	pop	de
+	ld	a,l
+	or	a
+	ret	z
+	ld	e,l		;"  INC  index " or "  DEC  index "
+	jp	ptcod2
+;
+;	   memory[ index +- , const ]
+memor11:
+	call	pacod		;"  PUSH  AF"
+	pop	hl
+	pop	de
+	ld	a,d
+	push	de
+	push	hl
+	ld	l,7eh		;"  LD  A,(IX+d) " or "  LD  A,(IY+d)  "
+	call	ptcod3
+	pop	hl
+	pop	de
+	ld	a,l
+	or	a
+	jr	z,memor12
+	ld	e,l		;"  INC  index " or "  DEC  index "
+	call	ptcod2
+	xor	a
+memor12:
+	jp	stoptb
+;
+;	   port[ exp_1 ] := exp_2
+port::
+	cp	0bah		;'port' ?
+	jr	z,$+6
+	  cp	0f6h		;'@@' ?
+	  jr	nz,itrfun
+;
+	call	gtoken
+	cp	'['
+	jp	nz,experr
+	call	gtoken
+	call	expr2		;expression_1
+	ld	a,(tokcod)
+	cp	']'
+	jp	nz,experr
+	call	gtoken
+	cp	0f0h		;':=' ?
+	jr	nz,port1
+	call	decopt		; iy := iy - 3 : dec(optble)
+	ld	a,0f5h		;"  PUSH  AF  "
+	call	ptcod1
+	call	gtoken
+	call	expr1		;expression_2
+	ld	de,0d14ah	;"  POP  DE  "
+	call	ptcod2		;"  LD   C,D  "
+	ld	de,0ed79h	;"  OUT  (C),A  "
+	jp	ptcod2
+;
+;	   port[ exp_1 ]
+port1:
+	ld	a,4fh		;"  LD  C,A  "
+	ld	hl,78edh	;"  IN  A,(C)  "
+	jp	ptcod3
+;
+;    intrinsic function    inc( var ), dec( var )
+itrfun::
+	cp	0ach		;'inc' ?
+	jr	z,itrfun1
+	cp	0adh		;'dec' ?
+	jr	nz,itrfun2
+	ld	a,1
+	defb	0feh
+itrfun1:
+	xor	a
+	push	af
+	call	gtoken		;get next token
+	cp	'('
+	jp	nz,experr
+	call	gtoken
+	dec	a
+	jp	nz,experr
+	ld	hl,idetyp
+	call	seasym		;search symbol table
+	or	a
+	call	nz,misvar
+	ld	a,(idetyp)
+	and	0fh
+	cp	2		;variable name ?
+	jp	nz,experr
+	ld	hl,(adrs)
+	ld	a,21h		;"  LD  HL,nn "
+	call	ptcod3
+	pop	af
+	add	a,34h		;"  INC  (HL)  " or "  DEC  (HL) "
+	call	ptcod1
+	xor	a
+	call	stoptb
+	ld	hl,ldam		;"  LD  A,(HL)  "
+	call	codgen
+	call	gtoken
+	jp	chkpar		;')' ?
+;
+ldam:	defb	-1
+	ld	a,(hl)
+;
+;   intrinsic function	rl( exp ), rlc( exp ), rr( exp )
+;			rrc( exp ), sra( exp ),decj( exp )
+itrfun2:
+	cp	0aeh		;'rl','rlc','rr','rrc','sra','decj' ?
+	jp	c,vardat
+	cp	0b3h+1
+	jr	nc,itrfun3
+	sub	0aeh
+	push	af
+	call	gtoken
+	cp	'('
+	jp	nz,experr
+	call	gtoken
+	call	exprx		;expression
+	call	expr5
+	pop	af
+	ld	e,a
+	ld	d,0
+	ld	hl,iteobj
+	add	hl,de
+	ld	a,(hl)
+	cp	0cbh
+	jp	nz,ptcod1
+	ld	d,a
+	ld	e,2fh		;"  SRA  A  "
+	jp	ptcod2
+;
+iteobj:	rla
+	rlca
+	rra
+	rrca
+	defb	0cbh
+	daa
+;
+;    intrinsic function	   carry( exp ), zero( exp )
+;			   sign( exp ), parity( exp ),  overflow( exp )
+itrfun3:
+	cp	0b8h+1		;'carry','zero','sign','parity','overflow'?
+	jr	nc,vardat
+	sub	0b4h
+	push	af
+	call	gtoken
+	cp	'('
+	jp	nz,experr
+	call	gtoken
+	cp	')'
+	jr	z,itrfun4
+	call	exprx		;expression
+	call	expr5
+	jr	itrfun8
+itrfun4:
+	call	gtoken
+	call	pacod		;"  PUSH  AF  "
+	xor	a
+	call	stoptb
+itrfun8:
+	pop	af
+	jr	nz,itrfun5
+	ld	a,9fh		;"  SBC  A,A  "
+	jr	itrfun6
+itrfun5:
+	push	af
+	ld	de,3e00h	;"  LD  A,0  "
+	call	ptcod2
+	pop	af
+	dec	a
+	jr	nz,itrfun7
+	ld	de,2001h	;"  JR  NZ,$+3"
+	call	ptcod2
+	ld	a,2fh		;"  CPL  "
+itrfun6:
+	jp	ptcod1
+itrfun7:
+	ld	hl,0
+	dec	a
+	ld	a,0f2h		;"L1:  JP  P,0  "
+	jr	z,$+4
+	  ld	a,0e2h		;"L1:  JP  PO.0  "
+	call	ptcod3
+	ld	a,2fh		;"  CPL  "
+	call	ptcod1
+	dec	hl
+	dec	hl
+	dec	hl
+	jp	ptcha		;"  chain L1+1   "
+;
+;	variabel & data name
+vardat::
+	ld	hl,(conval)
+	or	a
+	jp	z,const5
+	dec	a		;identifier ?
+	jp	nz,const
+	ld	hl,idetyp
+	call	seasym		;search symbol table
+	or	a		;found ?
+	jr	nz,uvarck	;skip if not
+	ld	hl,(adrs)
+	ld	a,(idetyp)
+	and	0fh
+	cp	1		;constant name ?
+	jp	z,const5	;skip if so
+	cp	8		;label ?
+	jp	z,experr	;error if so
+	cp	9		;function name ?
+	jp	z,funcal	;skip if so
+	jr	vardat0
+uvarck:
+	ld	hl,(cptr)
+	call	spskip		;space skip
+	cp	'('
+	jp	z,ufuncl
+	call	misvar
+	ld	a,2
+	ld	hl,0
+;
+;	   var[ exp_1 ] := exp_2
+vardat0:
+	push	af
+	push	hl
+	call	gtoken		;get next token
+	cp	'['
+	jr	nz,vardat5
+	call	gtoken
+	call	logexp		;expression_1
+	ld	a,(tokcod)
+	cp	']'
+	jp	nz,experr
+	ld	a,(iy-3)
+	cp	2		;constant ?
+	jr	z,vardat4
+	or	a		;expression ?
+	jr	z,vardat1
+	ld	hl,ldexa
+	call	codgen		;code generate
+vardat1:
+	pop	hl
+	call	stoptb		;store operand table
+	ld	hl,indobj
+	call	codgen		;code generate
+	call	decopt		; iy :=  iy - 3 : dec(optble)
+	call	gtoken
+	cp	0f0h		;':=' ?
+	jr	nz,vardat2
+	pop	af
+	cp	3		;data ?
+	jp	z,experr
+	call	decopt		; iy := iy - 3 : dec(optble)
+	ld	a,0e5h		;"  PUSH  HL  "
+	call	ptcod1
+	call	gtoken
+	call	expr1		;expression_2
+	ld	de,0e177h	;"  POP  HL  "
+	jp	ptcod2		;"  LD   (HL),A  "
+;
+;	   var[ exp ]
+vardat2:
+	pop	af
+	ld	a,7eh		;"  LD   A,(HL)  "
+	jp	ptcod1
+;
+;	   var[ const ] := exp
+vardat4:
+	pop	hl
+	ld	a,(iy-2)
+	add	a,l
+	ld	l,a
+	jr	nc,$+3
+	  inc	h		;hl := hl + opr
+	push	hl
+	call	decopt		;iy := iy - 3 : dec(optble)
+	call	gtoken
+;
+;	   var := exp
+vardat5:
+	cp	0f0h		;':=' ?
+	jr	nz,vardat6
+	pop	hl
+	pop	af
+	cp	3		;data ?
+	jp	z,experr
+	push	hl
+	call	gtoken
+	call	expr2		;expression
+	pop	hl
+	ld	a,32h		;"  LD  (nn),A  "
+	jp	ptcod3
+;
+;	   val
+vardat6:
+	pop	hl
+	pop	af
+	ld	a,1
+	jp	stoptb
+;
+indobj:	defb	7
+	ld	e,a
+	ld	d,0
+	ld	hl,opr1w
+	add	hl,de
+;
+;	constant
+const::
+	call	bytcon		;byte constant
+	jr	const6
+const5:
+	ld	a,h
+	or	a		;check h=0...+127 ?
+	call	nz,ilcnor
+	push	hl
+	call	gtoken
+	pop	hl
+const6:
+	ld	a,2
+	jp	stoptb		;store operand table
+;
+;	function call
+ufuncl:
+	ld	hl,0
+ufuncl1:
+	ld	(caladr),hl
+	ld	bc,adrs-identi
+	ld	hl,identi
+	call	blkpsh		;block push
+	call	func1
+	ld	bc,adrs-identi
+	ld	hl,identi
+	call	blkpop		;block pop
+	ld	hl,(caladr)
+	ld	(adrs),hl
+	ld	hl,idetyp
+	ld	(hl),89h	;type = undefined function
+	jp	regsym		;symbol table register
+;
+funcal::
+	ld	a,(idetyp)
+	rlca			;undefined function ?
+	jr	c,ufuncl1
+	ld	(caladr),hl
+;
+;	   func( exp_1, ... , exp_n : const1, const_2 )
+func1::
+	call	gtoken
+	cp	'('
+	jp	nz,experr
+	call	pacod		;"  PUSH  AF  "
+	ld	a,(loopb)
+	or	a		;loop # ?
+	push	af
+	ld	a,0c5h		;"  PUSH  BC  "
+	call	nz,ptcod1
+	ld	hl,(caladr)
+	push	hl
+	call	gtoken
+	cp	';'
+	jr	z,funcal4
+	cp	')'
+	jp	z,funcal7
+	ld	de,3601h
+	push	de
+	jr	funcal2
+funcal1:
+	push	de
+	call	gtoken
+funcal2:
+	call	expr1		;expression_n
+	call	decopt		;iy := iy - 3 : dec(optble)
+	ld	a,0f5h		;"  PUSH  AF  "
+	call	ptcod1
+	pop	de
+	ld	a,(tokcod)
+	cp	';'
+	jr	z,funcal3
+	cp	')'
+	jr	z,funcal3
+	cp	','
+	jp	nz,experr
+	inc	e
+	ld	a,e
+	cp	32+1
+	jr	c,funcal1
+	call	z,tmarg
+	ld	e,32+1
+	jr	funcal1
+funcal3:
+	push	af
+	push	de
+	ld	a,21h
+	ld	hl,(datorg)	;"  LD  HL,DSEG  "
+	call	ptcod3
+	pop	de
+	call	ptcod2		;"  LD  (HL),n  "
+	pop	af
+	cp	')'
+	jr	z,funcal8
+	jr	funcal5
+funcal4:
+	ld	a,0afh		;"  XOR  A  "
+	call	ptcod1
+	ld	a,32h
+	ld	hl,(datorg)	;"  LD   (DSEG),A  "
+	call	ptcod3
+funcal5:
+	call	gtoken
+	cp	','
+	jr	z,funcal6
+	cp	0bfh		; ix ?
+	jr	nz,funcal5.2
+	ld	de,0dde5h	;"  PUSH  IX  "
+	call	ptcod2
+	ld	a,0e1h		;"  POP   HL  "
+	call	ptcod1
+	call	gtoken
+	jr	funcal5.5
+funcal5.2:
+	call	conexp		;constant expression
+	ld	a,21h
+	call	ptcod3		;"  LD   HL,nn  "
+funcal5.5:
+	ld	a,(tokcod)
+	cp	')'
+	jr	z,funcal8
+	cp	','
+	jp	nz,experr
+funcal6:
+	call	gtoken
+	cp	0c0h		; iy ?
+	jr	nz,funcal6.2
+	ld	de,0fde5h	;"  PUSH  IY  "
+	call	ptcod2
+	ld	a,0d1h		;"  POP   HL  "
+	call	ptcod1
+	call	gtoken
+	jr	funcal6.5
+funcal6.2:
+	call	conexp		;constant expression
+	ld	a,11h
+	call	ptcod3
+funcal6.5:
+	ld	a,(tokcod)
+	cp	')'
+	jp	nz,experr
+	jr	funcal8
+funcal7:
+	ld	a,0afh		;"  XOR  A  "
+	call	ptcod1
+	ld	a,32h
+	ld	hl,(datorg)	;"  LD   (DSEG),A  "
+	call	ptcod3
+funcal8:
+	pop	de
+	ld	hl,(cloc)
+	inc	hl
+	ld	(caladr),hl	; funadr := cloc + 1
+	ex	de,hl
+	ld	a,0cdh
+	call	ptcod3		;"  CALL  nn  "
+	pop	af
+	ld	a,0c1h		;"  POP   BC  "
+	call	nz,ptcod1
+	ld	a,0
+	call	stoptb		;store operand table
+	jp	gtoken
+;
+;	**  preset operand table pointer & work clear  **
+;
+propt::
+	ld	iy,oprtbl
+	xor	a
+	ld	(optble),a
+	ld	(puhptf),a
+	ret
+;
+;	**  store operand table
+stoptb::  ;	a : operand type ( 0=exp, 1=var, 2=cons )
+	  ;	hl: address or constant
+	ld	(iy+0),a
+	ld	(iy+1),l
+	ld	(iy+2),h	;store
+	ld	de,3
+	add	iy,de
+	ld	hl,optble
+	inc	(hl)
+	ld	a,(hl)		;check
+	cp	(oprtbe-oprtbl)/3
+	jp	nc,experr
+	ret
+;
+;	**  decrement operand table pointer  **
+;
+decopt::
+	dec	iy
+	dec	iy
+	dec	iy
+	push	hl
+	ld	hl,optble
+	dec	(hl)
+	pop	hl
+	ret
+;
+;	**  exchange operand 1, operand 2  **
+;
+oprexc::
+	push	iy
+	pop	de
+	ld	hl,-3
+	add	hl,de
+	ld	b,3
+oprexc1:
+	dec	hl
+	dec	de
+	ld	a,(de)
+	ld	c,(hl)
+	ex	de,hl
+	ld	(hl),c
+	ld	(de),a
+	djnz	oprexc1
+	ret
+;
+;
+opr1b	equ	0b8h		;operand 1 byte data mark
+opr1w	equ	0b9b9h		;operand 1 word data mark
+opr2b	equ	0bah		;operand 2 byte data mark
+opr2w	equ	0bbbbh		;operand 2 word data mark
+;
+;	**  dyadic operation, code generate  **
+;
+dyagen:: ;	hl: address table address
+	 ;	iy: operand table pointer
+	ld	a,(iy-6)
+	ld	e,a
+	add	a,a
+	add	a,e
+	add	a,(iy-3)	;a := m(iy-6)*3 + m(iy-3)
+	cp	8
+	jp	z,codgen10	;skip if so
+	add	a,a
+	ld	e,a
+	ld	d,0
+	add	hl,de
+	ld	e,(hl)
+	inc	hl
+	ld	d,(hl)
+	ex	de,hl		;hl = object code store address
+	jr	codgen0
+;
+;	**  code generate  **
+codgen::  ;	hl: object code store address
+	  ;	iy: operand table pointer
+	ld	de,3
+	add	iy,de		; iy := iy + 3
+	ex	de,hl
+	ld	hl,optble
+	inc	(hl)		;inc(optble)
+	ex	de,hl
+;
+codgen0:
+	ld	a,(hl)
+	ld	b,a
+	or	a		;"PUSH  AF" output ?
+	call	m,codgen15
+	push	bc
+	push	hl
+	call	putobj		;put object
+	pop	hl
+	pop	bc
+codgen1:
+	inc	hl
+	push	bc
+	ld	a,(hl)
+	cp	opr1b		;operand 1, byte out ?
+	jr	nz,codgen2
+	ld	a,(iy-5)
+	jr	codgen7
+codgen2:
+	cp	low opr1w	;operand 1, word out ?
+	jr	nz,codgen3
+	ld	a,(iy-5)
+	push	hl
+	call	putobj
+	ld	a,(iy-4)
+	jr	codgen5
+codgen3:
+	cp	opr2b		;operand 2, byte out ?
+	jr	nz,codgen4
+	ld	a,(iy-2)
+	jr	codgen7
+codgen4:
+	cp	low opr2w	;operand 2, word out ?
+	jr	nz,codgen6
+	ld	a,(iy-2)
+	push	hl
+	call	putobj
+	ld	a,(iy-1)
+codgen5:
+	call	putobj
+	ld	hl,(cloc)
+	inc	hl
+	inc	hl
+	ld	(cloc),hl	;cloc := cloc + 2
+	pop	hl
+	inc	hl
+	pop	bc
+	dec	b
+	jr	codgen8
+codgen6:
+	cp	0cdh		;call ?
+	jr	nz,codgen7
+	push	hl
+	call	putobj
+	pop	hl
+	inc	hl
+	ld	e,(hl)
+	inc	hl
+	ld	d,(hl)
+	push	hl
+	ld	hl,(codorg)
+	add	hl,de		;add bias to call addres
+	push	hl
+	ld	a,l
+	call	putobj		;put call hi-address
+	pop	af
+	call	putobj		;put call low-address
+	ld	hl,(cloc)
+	inc	hl
+	inc	hl
+	inc	hl
+	ld	(cloc),hl	;cloc := cloc + 3
+	pop	hl
+	pop	bc
+	dec	b
+	dec	b
+	jr	codgen8
+codgen7:
+	push	hl
+	call	ptcodx		;code out
+	pop	hl
+	pop	bc
+codgen8:
+	djnz	codgen1
+	ld	(iy-6),0
+	ld	a,0ffh
+	ld	(puhptf),a
+	call	decopt		; iy := iy - 3 : dec(optble)
+	or	a		; cy := 0
+	ret
+;
+codgen10:
+	call	decopt		; iy := iy - 3 : dec(optble)
+	scf
+	ret
+;
+codgen15:
+	neg
+	ld	b,a
+	ld	a,(puhptf)
+	or	a
+	ld	a,b
+	ret	z
+	inc	a
+	push	bc
+	push	hl
+	call	ptcodx		;put code length
+	pop	hl
+	pop	bc
+	ld	a,0f5h		;"  PUSH  AF  "
+	ret
+;
+;	**  put  "  PUSH  AF  " code  **
+;
+pacod::
+	ld	a,(puhptf)
+	or	a
+	ld	a,0f5h		;"  PUSH  AF  "
+	jp	nz,ptcod1
+	ld	a,0ffh
+	ld	(puhptf),a
+	ret
+;
+;	**  put object code  (1..3 byte )  **
+;
+ptcod1::	; 1 byte out  ( reg a )
+	push	af
+	xor	a
+	call	putobj		;code length 1 byte
+	pop	af
+ptcodx:
+	call	putobj		;put reg a
+	ld	hl,(cloc)
+	inc	hl
+	ld	(cloc),hl
+	ret
+;
+ptcod2::	; 2 byte out	( reg d, e )
+	ld	h,e
+	ld	l,d
+;
+ptcodw:		; word out  ( reg l,h )
+	push	hl
+	ld	a,2
+	call	putobj		;code length 2 byte
+	jr	ptcody
+;
+ptcod3:		; 3 byte out ( reg a, l, h )
+	push	hl
+	push	af
+	ld	a,3
+	call	putobj		;code length 3 byte
+	pop	af
+	call	ptcodx
+ptcody:
+	pop	hl
+	ld	a,l
+	push	hl
+	call	putobj		;put reg 1
+	pop	af
+	call	putobj		;put reg h
+	ld	hl,(cloc)
+	inc	hl
+	inc	hl
+	ld	(cloc),hl
+	ret
+;
+;	**  move identifier to anme adra  **
+;
+movname::
+	ld	hl,identi
+	ld	de,strbuf
+	ld	b,adrs-identi
+movnam1:
+	ld	a,(hl)
+	ld	(de),a
+	or	a
+	ret	z
+	inc	hl
+	inc	de
+	djnz	movnam1
+	ld	a,b
+	ld	(de),a
+	ret
+;
+;	**  put name  **
+;
+ptname::  ;	a : name type ( 56h...5ah )
+	call	putobj
+	ld	hl,strbuf
+ptname1:
+	ld	a,(hl)
+	or	a
+	jp	z,putobj
+	push	hl
+	call	putobj
+	pop	hl
+	inc	hl
+	jr	ptname1
+;
+;	**  put location count  **
+;
+ptloc::
+	push	hl
+	ld	a,80h
+	jr	ptcha1
+;
+;	**  put chain address  **
+;
+ptcha::
+	push	hl
+	ld	a,81h
+ptcha1:
+	call	putobj		;chain
+	pop	hl
+	ld	a,l
+	push	hl
+	call	putobj		;put reg l
+	pop	af
+	jp	putobj		;put reg h
+;
+;	**  constant expression  **
+;
+conexp::
+	call	wodcon
+conexp1:
+	ld	a,(tokcod)
+	cp	'+'
+	jr	z,conexp2
+	cp	'-'
+	ret	nz
+	push	hl
+	call	gtoken
+	call	wodcon		;word constant
+	ex	de,hl
+	pop	hl
+	or	a
+	sbc	hl,de		; subtract
+	jr	conexp1
+conexp2:
+	push	hl
+	call	gtoken
+	call	wodcon		;wrod constant
+	pop	de
+	add	hl,de
+	jr	conexp1		;
+;
+;	** byte constant  **
+;
+bytcon::
+	ld	hl,datinl
+	ld	a,(hl)
+	push	af
+	ld	(hl),0
+	call	wodcon
+	pop	af
+	ld	(datinl),a
+	ld	a,h
+	or	a
+	jp	nz,ilcnor	;error : illegal constant
+	ret
+;
+;	**  word constant  **
+;
+wodcon::
+	ld	hl,datinl
+	ld	b,(hl)
+	ld	a,(tokcod)
+	cp	0bbh		;'hi' ?
+	jr	z,bytcon1
+	cp	0bch		;'low' ?
+	jr	z,bytcon2
+	jp	wodcon0
+bytcon1:
+	push	bc
+	ld	(hl),0
+	call	gtoken
+	call	wodcon0
+	ld	l,h
+	jr	bytcon3
+bytcon2:
+	push	bc
+	ld	(hl),0
+	call	gtoken
+	call	wodcon0
+bytcon3:
+	pop	af
+	ld	(datinl),a
+	ld	h,0
+	ret
+;
+wodcon0:
+	ld	a,(tokcod)
+	or	a
+	jr	nz,wodcon1
+	ld	hl,(conval)
+	jr	wodcon5
+wodcon1:
+	dec	a
+	jr	nz,wodcon2
+	ld	hl,idetyp
+	call	seasym		;search symbol table
+	or	a		;found ?
+	call	nz,miscon
+	ld	a,(idetyp)
+	and	0fh
+	dec	a		;constant name ?
+	jp	nz,badcon
+	jr	wodcon4
+wodcon2:
+	cp	'.'-1
+	jp	nz,badcon
+	call	gtoken		;get next token
+	dec	a
+	jp	nz,conerr
+	ld	hl,idetyp
+	call	seasym		;search symbol table
+	or	a		;found ?
+	jr	nz,wodcon8
+	ld	a,(idetyp)	
+	and	0fh
+	dec	a		;constant name ?
+	jp	z,conerr	;error if so
+	dec	a		;variable name ?
+	jr	z,wodcon4
+	dec	a		;data name ?
+	jr	z,wodcon4
+	sub	5		;table or function name ?
+	jr	nc,wodcon6
+wodcon4:
+	ld	hl,(adrs)
+wodcon5:
+	push	hl
+	call	gtoken
+	pop	hl
+	ret
+wodcon6:
+	ld	a,(datinl)
+	or	a		;data or inline ?
+	jp	z,conerr	;error if not
+	ld	de,(adrs)
+	ld	a,(idetyp)
+	ld	c,a
+	and	0fh
+	cp	9		;function name ?
+	jr	c,wodcon7
+	call	funchk		;function ?
+	jp	nc,conerr	;error if label
+	bit 	7,c
+	jr	nz,wodcon9
+	jr	wodcon4
+wodcon7:
+	call	funchk		;label ?
+	jp	c,conerr	;error if function
+	bit	7,c
+	jr	nz,wodcon9
+	jr	wodcon4
+wodcon8:
+	ld	a,(datinl)
+	or	a		;data or inline ?
+	jp	z,conerr	;error if not
+	ld	de,0
+	call	funchk		;function ?
+	ld	a,98h		;undefined label
+	jr	nc,$+4
+	  ld	a,89h		;undefined function
+	ld	(idetyp),a	;set type
+wodcon9:
+	ld	hl,(cloc)
+	ld	(adrs),hl
+	push	de
+	ld	hl,idetyp
+	call	regsym		;symbol table register
+	pop	hl
+	jr	wodcon5
+;
+funchk:
+	ld	hl,(cptr)
+	call	spskip		;space skip
+	jr	z,funchk1	;end of line ?
+	cp	'('
+	jr	nz,funchk1
+	call	nxspsk		;space skip
+	jr	z,funchk1	;end of line ?
+	cp	')'
+	jr	nz,funchk1
+	inc	hl
+	ld	(cptr),hl
+	scf			; cy := 1
+	ret
+funchk1:
+	or	a		; cy := 0
+	ret
+;
+;	**  block push  **
+;
+blkpsh:: ;	bc: push size
+	 ;	hl: source address
+	pop	ix
+	ex	de,hl
+	ld	hl,0
+	add	hl,sp
+	or	a
+	sbc	hl,bc
+	ld	sp,hl
+	ex	de,hl
+	ldir			;push
+	jp	(ix)
+;
+;	**  block pop  **
+;
+blkpop:: ;	bc: pop size
+	 ;	hl: source address
+	pop	ix
+	ex	de,hl
+	ld	hl,0
+	add	hl,sp
+	ldir			;pop
+	ld	sp,hl
+	jp	(ix)
+;
+;	**  get next token  **
+;
+gtoken::
+	ld	a,(tokcod)
+	cp	0ffh		;end ?
+	ret	z		;return if so
+;
+	ld	hl,(cptr)
+gtoken0:
+	call	spskip
+	jr	nz,gtoken3
+gtoken1:
+	call	getsou		;get source program ( 1 line )
+	jr	nc,gtoken2
+gtoken1.5:
+	call	edincl		;end check
+	jr	c,gtoken0
+	ld	a,0ffh		;a = 0ffh : end of program
+	jp	gtoken33
+gtoken2:
+	ld	(lino),de
+	push	hl
+	ex	de,hl
+	ld	a,(stmflg)
+	or	a
+	call	nz,ddspli	;line number display object out
+	pop	hl
+	call	spskip		;space skip
+	jr	z,gtoken1
+gtoken3:
+	cp	'/'
+	jr	nz,gtoken3.5
+	inc	hl
+	ld	a,(hl)
+	dec	hl
+	cp	'*'		;'/*' ?
+	ld	a,(hl)
+	jr	nz,gtoken3.5
+	inc	hl
+	call	coment		;comment skip
+	jr	c,gtoken1.5
+	jr	gtoken0
+gtoken3.5:
+	ld	(eptr),hl
+	ex	de,hl
+;
+;  constant  ( decimal , hexadecimal & character )
+;
+	call	numtst		;numeric ?
+	jr	c,gtoken4	;skip if not
+	call	decbin		;convert decimal string into binary value
+	jr	gtoken7
+gtoken4:
+	cp	'$'
+	jr	nz,gtoken6
+	inc	de
+	ld	a,(de)
+	call	hextst		;hexadecimal ?
+	jr	c,gtoken5	;skip if not
+	call	hexbin		;convert hex string into binary value
+	jr	gtoken7
+gtoken5:
+	ld	hl,(cloc)	;load code location counter
+	jr	gtoken7
+gtoken6:
+	cp	''''
+	jr	nz,gtoken10
+	ld	h,0
+	inc	de
+	ld	a,(de)
+	or	a
+	jr	z,ccher1
+	ld	l,a		;load character coustant
+	inc	de
+	ld	a,(de)
+	cp	''''
+	jr	nz,ccher2
+	inc	de
+	jr	gtoken7
+ccher1:
+	ld	hl,''''
+	ld	(strbuf),hl
+	ld	hl,' '
+	jr	gtoken7
+ccher2:
+	ld	(strbuf+1),hl
+	ld	a,''''
+	ld	(strbuf),a
+gtoken7:
+	xor	a		; a = 0 : constant
+	ld	(conval),hl
+	jp	gtoken31.5
+;
+;  reserved word & identifier
+;
+gtoken10:
+	cp	'_'
+	jr	z,$+7
+	  call	lettst		;letter ?
+	  jr	c,gtoken25	;skip if not
+	ld	hl,identi
+	ld	b,adrs-identi
+gtoken11:
+	ld	(hl),a		;store identifier area
+	inc	hl
+gtoken12:
+	inc	de
+	ld	a,(de)
+	call	numtst		;numeric ?
+	jr	nc,gtoken13
+	call	lettst		;letter ?
+	jr	nc,gtoken13
+	cp	'_'		;'_' ?
+	jr	nz,gtoken14	;skip if not
+gtoken13:
+	djnz	gtoken11
+	ld	b,1
+	jr	gtoken12
+gtoken14:
+	ld	(hl),0		;store end of string mark
+	ld	(cptr),de
+;
+;  search reserved word
+;
+	ld	de,rsword
+gtoken15:
+	ld	hl,identi
+gtoken16:
+	ld	a,(de)
+	or	a
+	jp	m,gtoken17
+	jr	z,gtoken20
+	ld	c,a
+	ld	a,(hl)
+	call	traupc		;translate to upper case
+	cp	c
+	jr	nz,gtoken18
+	inc	de
+	inc	hl
+	jr	gtoken16
+gtoken17:
+	ld	a,(hl)
+	or	a
+	jr	nz,gtoken19
+	ld	a,(de)		;a = reserved word No.
+	jp	gtoken33
+gtoken18:
+	inc	de
+	ld	a,(de)
+	or	a
+	jp	p,gtoken18
+gtoken19:
+	inc	de
+	jr	gtoken15
+gtoken20:
+	ld	a,1		; a = 1 : identifier
+	jr	gtoken33
+;
+;  search special character ( delimiter,operation, ... )
+;
+gtoken25:
+	ld	hl,specha
+	ld	bc,speche-specha
+	cpir			;search
+	jr	nz,gtoken35
+	ld	c,a
+	inc	de
+	ld	(cptr),de
+;
+	cp	':'
+	jr	nz,gtoken27
+	ld	a,(de)
+	cp	'='		;':=' ?
+	ld	a,0f0h
+	jr	gtoken30
+gtoken27:
+	cp	'<'
+	jr	nz,gtoken28
+	ld	a,(de)
+	sub	'<'		;'<<' or '<=' or '<>'
+	cp	3
+	jr	nc,gtoken32
+	add	a,0f1h
+	jr	gtoken31
+gtoken28:
+	cp	'>'
+	jr	nz,gtoken29
+	ld	a,(de)
+	sub	'='		;'>=' or '>>'
+	cp	2
+	jr	nc,gtoken32
+	add	a,0f4h
+	jr	gtoken31
+gtoken29:
+	cp	'@'
+	jr	nz,gtoken32
+	ld	a,(de)
+	cp	'@'		;'@@' ?
+	ld	a,0f6h
+gtoken30:
+	jr	nz,gtoken32
+gtoken31:
+	inc	de
+gtoken31.5:
+	ld	(cptr),de
+	jr	gtoken33
+gtoken32:
+	ld	a,c
+gtoken33:
+	ld	(tokcod),a
+	ret
+;
+gtoken35:
+	ld	l,a
+	ld	h,0
+	ld	(strbuf),hl
+	jp	illchr
+;
+;	<<  reserved word  >>
+;
+rsword::
+	defb	'AND',		0a8h
+	defb	'AT',		0beh
+	defb	'BREAK',	08bh
+	defb	'BY',		09ah
+	defb	'BYTE',		091h
+	defb	'CARRY',	0b4h
+	defb	'CONS',		08ch
+	defb	'DATA',		08eh
+	defb	'DEC',		0adh
+	defb	'DECJ',		0b3h
+	defb	'DEX',		0a5h
+	defb	'DEBUG',	084h
+	defb	'ELSE',		095h
+	defb	'ELSEIF',	0bdh
+	defb	'EXIT',		09eh
+	defb	'FOR',		098h
+	defb	'GO',		09ch
+	defb	'GOTO',		09dh
+	defb	'HI',		0bbh
+	defb	'IF',		093h
+	defb	'INC',		0ach
+	defb	'INCLUDE',	081h
+	defb	'INLINE',	090h
+	defb	'INX',		0a4h
+	defb	'IX',		0bfh
+	defb	'IY',		0c0h
+	defb	'LDX',		0a2h
+	defb	'LOOP',		09bh
+	defb	'LOW',		0bch
+	defb	'MEMORY',	0b9h
+	defb	'MINUS',	0abh
+	defb	'NOT',		0a9h
+	defb	'OR',		0a7h
+	defb	'OVERFLOW',	0b8h
+	defb	'PARITY',	0b7h
+	defb	'PLUS',		0aah
+	defb	'PORT',		0bah
+	defb	'PROG',		080h
+	defb	'RECURSIVE',	08fh
+	defb	'RETURN',	09fh
+	defb	'RL',		0aeh
+	defb	'RLC',		0afh
+	defb	'RR',		0b0h
+	defb	'RRC',		0b1h
+	defb	'SET',		0a1h
+	defb	'SIGN',		0b6h
+	defb	'SRA',		0b2h
+	defb	'STOP',		0a0h
+	defb	'STX',		0a3h
+	defb	'THEN',		094h
+	defb	'TO',		099h
+	defb	'TROFF',	086h
+	defb	'TRON',		085h
+	defb	'UNTIL',	097h
+	defb	'VAR',		08dh
+	defb	'WHILE',	096h
+	defb	'WORD',		092h
+	defb	'XOR',		0a6h
+	defb	'ZERO',		0b5h
+	defb	0
+;
+;	<<  special character  >>
+;
+specha::
+	defb	'!"#%&()*+,-./:;'
+	defb	'<=>?@[]^{|}~'
+speche	equ	$
+;
+;	**  comment skip  **
+;
+coment::
+	inc	hl
+coment1:
+	ld	a,(hl)
+	or	a
+	jr	z,coment2
+	cp	'*'
+	jr	nz,coment
+	inc	hl
+	ld	a,(hl)
+	or	a
+	jr	z,coment2
+	cp	'*'
+	jr	z,coment1
+	cp	'/'
+	jr	nz,coment
+	or	a		;cy := 0
+	inc	hl
+	ret
+coment2:
+	call	getsou		;get source program
+	ret	c		;return if cy = 1
+	ld	(lino),de
+	jr	coment1
+;
+;	**  translate to upper case  **
+;
+traupc:: ;	a: character
+	cp	'a'
+	ret	c
+	cp	'z'+1
+	ret	nc
+	sub	20h
+	ret
+;
+;	**  space skip  **
+;
+spskip:: ;	hl : string address
+	ld	a,(hl)
+	or	a		;end of line ?
+	ret	z		;return if so ( eol : z=1 )
+	cp	09h		;tab code ?
+	jr	z,nxspsk	;skip if so
+	cp	' '		;space ?
+	ret	nz		;return if not ( non space : z=0 )
+nxspsk::
+	inc	hl
+	jr	spskip
+;
+;	**  numeric test  **
+;
+numtst:: ;	a : character
+	cp	'0'
+	ret	c
+	cp	'9'+1
+	ccf			; cy = 1 : non numeric
+	ret			; cy = 0 : numeric
+hextst:: ;	a : character
+	call	numtst
+	ret	nc
+	cp	'A'
+	ret	c
+	cp	'F'+1
+	ccf
+	ret	nc
+	cp	'a'
+	ret	c
+	cp	'f'+1
+	ccf			; cy = 1 : non hexadecimal
+	ret			; cy = 0 : hexadecimal
+;
+;	** latter test  **
+;
+lettst:: ;	a : cahracter
+	cp	'A'
+	ret	c
+	cp	'Z'+1
+	ccf
+	ret	nc
+	cp	'a'
+	ret	c
+	cp	'z'+1
+	ccf			; cy = 1 : non letter
+	ret			; cy = 0 : letter
+;
+;	**  convert decimal string into binary value  **
+;
+decbin:: ;	de : string address
+	ld	hl,0
+decbin1:
+	ld	a,(de)
+	sub	'0'		; a := m(de) - '0'
+	cp	9+1		;numeric ?
+	ret	nc		;return if not ( hl : value )
+	ld	b,h
+	ld	c,l
+	add	hl,hl
+	jr	c,dcoverr
+	add	hl,hl
+	jr	c,dcoverr
+	add	hl,bc
+	jr	c,dcoverr
+	add	hl,hl		; hl := hl * 10
+	jr	c,dcoverr
+	ld	c,a
+	ld	b,0
+	add	hl,bc		; hl := hl + a
+	jr	c,dcoverr
+	inc	de
+	jr	decbin1
+;
+dcoverr:
+	ld	hl,(eptr)
+	ld	de,strbuf
+	ld	b,strbfe-strbuf-1
+dcver1:
+	ld	a,(hl)
+	call	numtst
+	jr	c,hcver3
+	dec	b
+	inc	b
+	jr	z,dcver2
+	ld	(de),a
+	inc	de
+	dec	b
+dcver2:
+	inc	hl
+	jr	dcver1
+;
+;	**  convert hex string into binary value  **
+;
+hexbin:: ;	de : string
+	ld	hl,0
+hexbin1:
+	ld	a,(de)
+	call	hextst		;hexadecimal ?
+	ret	c		;return if not ( hl : value )
+	call	traupc		;translate to upper case
+	sub	'0'
+	cp	9+1
+	jr	c,hexbin2
+	sub	'A'-'9'-1
+hexbin2:
+	ld	c,a
+	ld	b,0
+	ld	a,h
+	and	0f0h
+	jr	nz,hcoverr
+	add	hl,hl
+	add	hl,hl
+	add	hl,hl
+	add	hl,hl		; hl := hl << 4
+	add	hl,bc
+	inc	de
+	jr	hexbin1
+;
+hcoverr:
+	ld	hl,(eptr)
+	ld	de,strbuf
+	ld	b,strbfe-strbuf-2
+	ld	a,(hl)
+	inc	hl
+	ld	(de),a		;move '$' character
+	inc	de
+hcver1:
+	ld	a,(hl)
+	call	hextst
+	jr	c,hcver3
+	dec	b
+	inc	b
+	jr	z,hcver2
+	ld	(de),a
+	inc	de
+	dec	b
+hcver2:
+	inc	hl
+	jr	hcver1
+hcver3:
+	push	hl
+	xor	a
+	ld	(de),a
+	call	illcon
+	pop	de
+	ld	hl,0
+	ret
+;
+;	**  error  **
+;
+
+;
+;  missing variable name
+;
+misvar::
+	ld	de,mvar
+	call	ermisn
+	ld	(hl),2
+	ret
+mvar:	defb	'variable',0
+;
+; missing constant name
+;
+miscon::
+	ld	de,mcon
+	call	ermisn
+	ld	(hl),1
+	ret
+mcon:	defb	'constant',0
+;
+ermisn:
+	ld	hl,0
+	ld	(adrs),hl
+	ld	hl,mserm
+	call	error
+	ld	hl,idetyp
+	ret
+mserm:	defb	'#Missing \ name : @'
+	defw	identi
+	defb	0
+;
+; bad option switch
+;
+opserr::
+	ld	hl,opserm
+	jp	abt
+opserm:	defb	'#Bad option switch',0
+;
+; illegal function name
+;
+ilferr::
+	ld	hl,ilferm
+	jp	abt
+ilferm:	defb	'#'
+illfun:	defb	'Illegal function name',0
+;
+ilefun::
+	ld	hl,ilefum
+	ld	de,identi
+	jp	error
+ilefum:	defb	'#@'
+	defw	illfun
+	defb	' : \',0
+;
+; illegal name
+;
+ilnerr::
+	ld	hl,ilnerm
+	jp	abt
+ilnerm:	defb	'#'
+illnam:	defb	'Illegal name',0
+;
+ilenam::
+	ld	hl,ilenmm
+	ld	de,identi
+	jp	error
+ilenmm:	defb	'#@'
+	defw	illnam
+	defb	' : \',0
+;
+; illegal label
+;
+ilelab::
+	ld	de,identi
+	ld	hl,illbem
+	jp	error
+illbem:	defb	'#Illegal label : \',0
+;
+; bad string data
+;
+bstrdt::
+	ld	hl,bstrms
+	jp	error
+bstrms:	defb	'#Bad string data',00
+;
+; too many arguments
+;
+tmarg::
+	ld	hl,tmargm
+	jp	error
+tmargm:	defb	'#Too many arguments',0
+;
+; illegal character
+;
+illchr::
+	ld	hl,illchm
+	ld	de,strbuf
+	jp	abt
+illchm:	defb	'#Illegal character : \',0
+;
+; illegal constant
+;
+ilcnds::
+	ld	de,ilcndm
+	jr	illcon1
+ilcndm:	defb	'displacement',0
+;
+ilcnor::
+	ld	de,ilcnom
+	jr	illcon1
+ilcnom:	defb	'over range',0
+;
+illcon:
+	ld	de,strbuf
+illcon1:
+	ld	hl,illcnm
+	call	error
+	ld	hl,0
+	ret
+illcnm:	defb	'#Illegal constant : \',0
+;
+; bad constant
+;
+badcon::
+	ld	hl,badcnm
+	jp	abt
+badcnm:	defb	'#Bad constant',0
+;
+; bad address constant
+;
+conerr::
+	ld	hl,bdadcm
+	jp	abt
+bdadcm:	defb	'#Bad address constant',0
+;
+; syntax error
+;
+synerr::
+	ld	hl,syems
+	jp	abt
+syems:	defb	'#Syntax error',0
+;
+; bad index operation
+;
+idxerr::
+	ld	hl,idems
+	jp	abt
+idems:	defb	'#Bad index operation',0
+;
+; bad expression
+;
+experr::
+	ld	hl,exems
+	jp	abt
+exems:	defb	'#Bad expression',0
+;
+;	abort
+abt:
+	call	error
+	jp	abort
+	
+;------------------------------------------------------
+;-		w o r k   a r e a
+;------------------------------------------------------
+	dseg
+	
+cptr::		defs	2	;character pointer ( source program )
+lino::		defs	2	;source line number
+optisw::	defs	1	;option switch
+stmflg::	defs	1	;not 00h; statement, 00h: non statement
+
+codorg::	defs	2	;code segment origin address
+datorg::	defs	2	;data segment origin address
+stkbot::	defs	2	;stack bottom address + 1
+
+cloc::		defs	2	;code location counter
+dloc::		defs	2	;data location counter
+wloc::		defs	2	;work data location counter
+conval::	defs	2	;constant value
+
+eptr::		defs	2	;error string pointer
+idetyp::	defs	1	;identifier type
+identi::	defs	12	;identifier ( max 12 character )
+adrs::		defs	2	;address ( & constant value )
+		defs	1	;filler
+		
+strbuf::	defs	16	;string buffer
+strbfe		equ	$
+
+tokcod::	defs	1	;token code
+localf::	defs	1	; 00h: global, not 00h: local
+datinl::	defs	1	; 01h: data declare, 02h inline statment
+loopb::		defs	1	;not 00h: use loop # statement
+puhptf::	defs	1	;not 00h: object " PUSH  AF " output
+
+optble::	defs	1	;operand table store length
+oprtbl::	defs	3*20	;operand table
+oprtbe		equ	$
+
+caladr::	defs	2	;function & subroutine call address
+
+lopadr::	defs	2	;loop address
+extadr::	defs	2	;exit address
+convar::	defs	2	;constant variable address
+terpar::	defs	2	;terminal parameter address
+incpar::	defs	2	;incrementation parameter address
+skpadr::	defs	2	;skip address
+nxtadr::	defs	2	;next address
+
+varadr::	defs	2	;variable address
+varsiz::	defs	2	;variable size
+
+idxpsf::	defs	1	;index push flag
+retjad::	defs	2	;return statement jump address
+
+work.e::
+
+	end
+

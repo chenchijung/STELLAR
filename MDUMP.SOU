@@ -1,0 +1,113 @@
+  /* memory dump */
+ 
+prog  mdump();
+ 
+cons    ngetchr := 1,                    /* get chr from console */
+      nputchr := 2;                    /* put chr to console   */
+ 
+var   d, i,
+        sttadr[4], endadr[4],
+        sadr[2], eadr[2],
+    ch;
+ 
+data  msttadr: "sttadr= $",0,
+        mendadr: "endadr= $",0,
+    header:  "      +0 +1 +2 +3 +4 +5 +6 +7 +8 +9 +A +B +C +D +E +F  0123456789ABCDEF",0;
+ 
+{
+    /* input disp adrs area */
+    putstr(;.msttadr);
+    for i:=0 to 3 {
+        sttadr[i] := getchr();
+    }
+    putnl();
+    putstr(;.mendadr);
+    for i:=0 to 3 {
+        endadr[i] := getchr();
+    }
+    putnl(2);
+    sadr[0] := (sttadr[0]-$30)*$10+(sttadr[1]-$30);
+    sadr[1] := (sttadr[2]-$30)*$10+(sttadr[3]-$30);
+    eadr[0] := (endadr[0]-$30)*$10+(endadr[1]-$30);
+    eadr[1] := (endadr[2]-$30)*$10+(endadr[3]-$30);
+     
+    /* disp memory data */
+    sadr[1] := sadr[1] & $f0;                                           /* start from adrlow=$x0 */
+    {
+        putstr(;.header);
+        putnl();
+        {
+            puthex(sadr[0]); puthex(sadr[1]);putchr(':');putchr(' ');   /* disp adrs */
+            for i:=0 to 15 {
+              puthex(memory[sadr[0], (sadr[1])+i]); putchr(' ');        /* disp by hex */
+            }
+            putchr(' ');
+            for i:=0 to 15 {
+                d:=memory[sadr[0], (sadr[1])+i];
+                ch:= ?(d>=$20 & d<=$7e;d,'.');
+                putchr(ch);                                             /* disp by ascii */
+            }
+            putnl();
+            sadr[1] := sadr[1] + $10;
+        } until (((sadr[0] <> eadr[0]) & (sadr[1] = $00)) | ((sadr[0] = eadr[0]) & (sadr[1] > eadr[1])));
+        putnl();
+        sadr[0] := sadr[0] + 1;
+    } until  ((sadr[0] > eadr[0]));
+}
+ 
+/***** subroutine *****/
+ 
+getchr();
+{
+    bdos(ngetchr);
+}
+ 
+putchr(x);
+{
+    bdos(nputchr, x);
+}
+ 
+putnl(n);
+cons
+    cr := $0d,
+    lf := $0a;
+var
+    pn at ( _work );
+{
+    if pn=0 then n:=1;
+    loop #,n {
+        bdos(nputchr, cr);
+        bdos(nputchr, lf);
+    }
+}
+ 
+putstr(;ix);
+var x;
+{
+    while x:=@[ix+] {
+        bdos(nputchr, x);
+    }
+}
+ 
+puthex(h);
+{
+    puthex1(h>>4);
+    puthex1(h);
+}
+
+puthex1(h);
+{
+	bdos(nputchr,?((h:=h & $0f)<10;h,h+7)+'0');
+}
+
+bdos(func,x;ix,#);
+var	argn at ( _work );
+{
+	if argn=1 then inline $dd,$e5,$d1;	/* push ix	; pop de */
+		  else inline $3a,#.x,$5f;	/* ld a,(x)	; ld e,a */
+	inline $3a,#.func,$4f;			/* ld a,(func)	; ld c,a */
+	inline $cd,#$0005;			/* call 0005h		 */
+	inline $e5,$fd,$e1;			/* push hl	; pop iy */
+}
+
+

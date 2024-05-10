@@ -1,0 +1,90 @@
+
+	/*   file dump   */
+	
+prog	file_dump(%debug,%d:$470);
+
+cons	dfcb	:= $005c,	/* default fcb		*/
+	dbuff	:= $0080,	/* default buffer	*/
+	reclen	:= 128,		/* 1 record = 128 byte	*/
+	
+	putchr	:= 2,		/* put console character */
+	printf	:= 9,		/* put string		*/
+	constf	:= 11,		/* get console status	*/
+	openf	:= 15,		/* open file		*/
+	readf	:= 20,		/* read file		*/
+	
+	on	:= $ff,
+	off	:= 0;
+	
+var	fcb	at ( dfcb ),
+	buffer	at ( dbuff ),
+	eof, bfptr , d, i, adr[2], ch[16];
+
+data	crlf:	13,10,'$',
+	nofil:	13,10,"No file$";
+	
+{
+	fcb[32] := 0;
+	
+	if bdos(openf;.fcb)=$ff then {
+		bdos(printf;.nofil);
+		goto exit1;
+	}
+	
+	eof := off; bfptr := reclen; adr[0] := adr[1] := 0;
+	while (d:=getfile(),^eof) {
+		if (adr[0] & $0f) = 0 then {
+			bdos (printf;.crlf);
+			puthex(adr[1]);puthex(adr[0]);
+			bdos(putchr,' ');
+			i := -1;
+		}
+		puthex( d );
+		bdos(putchr,' ');
+		ch[inc(i)] := ?(d>=$20 & d<=$7e | d>=$a1 & d<=$df ; d,'.');
+		ldx iy := adr; inx iy; stx adr := iy;
+		if (adr[0] & $0f) = 0 then {
+			for d:= 0 to 15 {
+				bdos(putchr,ch[d]);
+			}
+			if bdos(constf) then goto exit1;
+		}
+	}
+
+exit1:
+	bdos(printf;.crlf);
+}
+
+bdos(func,x;ix,#);
+var	argn at ( _work );
+{
+	if argn=1 then inline $dd,$e5,$d1;	/* push ix	; pop de */
+		  else inline $3a,#.x,$5f;	/* ld a,(x)	; ld e,a */
+	inline $3a,#.func,$4f;			/* ld a,(func)	; ld c,a */
+	inline $cd,#$0005;			/* call 0005h		 */
+	inline $e5,$fd,$e1;			/* push hl	; pop iy */
+}
+
+puthex(h);
+{
+	puthex1(h>>4);
+	puthex1(h);
+}
+
+puthex1(h);
+{
+	bdos(putchr,?((h:=h & $0f)<10;h,h+7)+'0');
+}
+
+getfile();
+{
+	if bfptr >= reclen then {
+		bfptr := 0;
+		if bdos(readf;.fcb) then {
+			eof := on;
+			return;
+		}
+	}
+	buffer[inc(bfptr)-1];
+}
+

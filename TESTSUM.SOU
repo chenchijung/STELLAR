@@ -1,0 +1,120 @@
+prog	testsum(%debug);
+
+cons	cr := $0d,
+	lf := $0a,
+	end_cal := 200;
+var	i,j,sum[2];
+
+data	hellom:	" The Sum of 1 to $",
+	hellom1: " is : $",
+	eol:	cr,lf,'$';
+
+{
+
+	for j := 1 to 20 {
+		set ix := 0;
+		for i := 1 to end_cal {
+			set ix := ix + i;
+		}
+		stx sum := ix;
+
+		putdec2(j);
+		bdos(9;.hellom);
+		putdec2(end_cal);
+		bdos(9;.hellom1);
+		puthex(sum[1]);
+		puthex(sum[0]);
+		bdos(9;.eol);
+	}
+	sub4(;$4000,$1320);
+	stx sum := ix;
+	puthex(sum[1]);
+	puthex(sum[0]);
+	sub4(;$3fff,$235a);
+	stx sum := ix;
+	puthex(sum[1]);
+	puthex(sum[0]);
+}
+
+%include hio.lib;
+
+
+puthex(h);
+{
+	puthex1(h>>4);
+	puthex1(h);
+}
+
+puthex1(h);
+{
+	bdos(2,?((h:=h & $0f)<10;h,h+7)+'0');
+}
+putdec2(h);
+var	h1,h2;
+{
+	h2 := 100;
+	{
+		h1 := h;
+		h1 := h / h2;
+		h := h % h2;
+		puthex1(h1);
+		h2 := h2 / 10;
+	} until h2 <= 0 ;
+}
+compare(;ix,iy);
+var h1[2],h2[2];
+{
+	stx h1 := ix;
+	stx h2 := iy;
+	if h1[1] > h2[1] then $01;
+	elseif h1[1] < h2[1] then $FF;
+	elseif h1[0] > h2[0] then $01;
+	elseif h1[0] < h2[0] then $FF;
+	else $00;
+}
+/*
+add4(;ix,iy);
+var h1[2],h2[2];
+{
+
+}
+*/
+sub4(;ix,iy);
+var h1[2],h2[2];
+{
+	stx h1 := ix;
+	stx h2 := iy;
+	if compare(;ix,iy) <> $ff then {
+		h1[0] := h1[0] - h2[0];
+		h1[1] := h1[1] minus h2[1];		
+	}
+	ldx ix := h1;
+}
+/*
+divide(;ix,iy);
+var h1[2],h2[2],h3[2],h4[2],i,temp;
+{
+	stx h1 := ix;
+	stx h2 := iy;
+	h3[0] := 0;
+	h3[1] := 0;
+	h4[0] := 0;
+	h4[1] := 0;
+	
+	for i := 1 to 16 {
+		ldx ix := h1;
+		ldx iy := h2;
+		temp := compare(;ix,iy);
+		if temp = $01 {
+			h1[0] := h1[0] - h2[0];
+			h1[1] := h1[1] minus h2[1];
+			
+		}
+		elseif temp = $ff {
+		}
+		elseif {
+		}
+	}	
+}
+*/
+

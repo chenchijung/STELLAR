@@ -1,0 +1,772 @@
+	title	convert object to intel HEX
+	subttl	Rev 1.00  06/15/1984
+	name	('covobj')
+.z80
+;************************************************	
+;*						*
+;*	convert sellar compiler object		*
+;*		to  intel HEX file		*
+;*						*
+;*		  ( Rev 1.00 )   06/15/1984	*
+;*						*
+;*	 Copyright (c) 1984 H.Ohnuki /MIA	*
+;*						*
+;************************************************
+
+rev	equ	100h		;revision 1.00
+
+;
+;	cp/m-80,msx-dos interface
+;
+reclen	equ	128	;1 record = 128 byte
+
+boot	equ	0000h	;system reboot entry
+bdos	equ	0005h	;bdos entry
+dfcb	equ	005ch	;default fcb
+dbuff	equ	0080h	;default buffer
+tpa	equ	0100h	;tpu address
+
+htab	equ	09h	;horiential tabulation
+cr	equ	0dh	;carriage return
+lf	equ	0ah	;line feed
+eof	equ	1ah	;end of file
+
+putchrf	equ	2	;put console character
+printf	equ	9	;print string function
+openf	equ	15	;open file function
+closef	equ	16	;close file function
+deletf	equ	19	;delete file function
+readf	equ	20	;read next record
+writef	equ	21	;write next record
+makef	equ	22	;make file
+setdmf	equ	26	;set dma address
+
+;----------------------------------------------------
+;			program
+;----------------------------------------------------
+
+	cseg
+	
+start::
+	ld	hl,(bdos+1)
+	ld	l,0
+	ld	sp,hl		;set sp reg
+	ld	de,-128		;stack size = 128 byte
+	add	hl,de
+	ld	(freeda),hl	;set free area ending address
+	inc	hl
+	inc	hl
+	ld	(objmov),hl
+	ld	hl,($memry)
+	ld	l,0
+	inc	h
+	ld	(frebga),hl	;set free area beginning address
+	ld	de,stamsg
+	ld	c,printf
+	call	bdos		;print starting message
+;
+	ld	a,(dfcb+1)
+	cp	' '		; file name ok ?
+	jp	z,nofile
+	ld	hl,dfcb+9
+	ld	a,(hl)
+	cp	' '
+	jr	nz,rdobjf
+	ld	(hl),'O'
+	inc	hl
+	ld	(hl),'B'
+	inc	hl
+	ld	(hl),'J'	;set file type '.OBJ'
+	jr	rdobjf
+;
+stamsg:	defb	cr,lf,'Stellar utility,  convert object ==> intel HEX'
+	defb	cr,lf,'Rev '
+	defb	rev/100h+'0','.',(rev/10h and 0fh)+'0',(rev and 0fh)+'0'
+	defb	'  Copyright (c) 1984  H.Ohnuki / MIA'
+crlf:	defb	cr,lf,'$'
+;
+;	read object file
+;
+rdobjf::
+	xor	a
+	ld	(symotf),a
+	ld	(dfcb+32),a	;read dfcb.cr
+	ld	de,dfcb
+	ld	c,openf
+	call	bdos		;open object file
+	inc	a
+	jp	z,nofile
+	ld	a,reclen
+	ld	(bufptr),a
+;
+	call	getobj		;get object tile
+	cp	55h		;start mark ?
+	jr	z,rdobjf1
+	cp	65h		;sym file out ?
+	jp	nz,badobj
+	call	mksyf1		;make sym file
+rdobjf1:
+	call	getobj
+	sub	80h		;location counter set ?
+	jp	nz,badobj
+	jp	setloc1
+;
+rdnext:
+	call	getobj
+	cp	0ffh		;end mark ?
+	jp	z,endobj
+	cp	56h
+	jp	c,setloc
+	cp	5ah+1		;name ?
+	jp	nc,setloc
+	sub	56h
+	add	a,a
+	ld	l,a
+	ld	h,0
+	ld	de,namadt
+	add	hl,de
+	ld	e,(hl)
+	inc	hl
+	ld	d,(hl)
+	ld	c,printf
+	call	bdos
+	
+	ld	a,(symotf)
+	or	a
+	jr	z,prtnam1
+	ld	a,(loc+1)	;symbol file address out
+	call	binhex		;convert to hex
+	push	de
+	ld	a,d
+	call	wrsymf
+	pop	de
+	ld	a,e
+	call	wrsymf
+	ld	a,(loc)
+	call	binhex		;convert to hex
+	push	de
+	ld	a,d
+	call	wrsymf
+	pop	de
+	ld	a,e
+	call	wrsymf
+	ld	a,' '
+	call	wrsymf
+;
+prtnam1:
+	call	getobj
+	or	a
+	jr	z,prtnam3
+	ld	e,a
+	ld	a,(symotf)
+	or	a
+	jr	z,prtnam2
+	push	de
+	ld	a,e
+	call	wrsymf		;sym file out
+	pop	de
+prtnam2:
+	ld	c,putchrf
+	call	bdos		;print name
+	jr	prtnam1
+prtnam3:
+	ld	a,(symotf)
+	or	a
+	jr	z,prtnam5
+	ld	hl,symhcu
+	inc	(hl)
+	ld	a,(hl)
+	cp	4
+	ld	a,htab
+	jr	nz,prtnam4
+	ld	(hl),0
+	ld	a,cr
+	call	wrsymf
+	ld	a,lf
+prtnam4:
+	call	wrsymf
+prtnam5:
+	ld	de,eqsym
+	ld	c,printf
+	call	bdos
+	ld	hl,(loc)
+	call	prhex4		;print address
+	jp	rdnext
+;
+namadt:	defw	prgnam,funnam,connam,varnam,datnam
+prgnam:	defb	cr,lf,'Program  name : $'
+funnam:	defb	cr,lf,'Function name : $'
+connam:	defb	cr,lf,'Constant name : $'
+varnam:	defb	cr,lf,'Variable name : $'
+datnam:	defb	cr,lf,'Data     name : $'
+endadr:	defb	cr,lf,lf,'End address   : $'
+prgsiz:	defb	cr,lf,'Program size  : $'
+pagsz1:	defb	'  [ $'
+pagsz2:	defb	' Page ]',cr,lf,'$'
+eqsym:	defb	' = $'
+;
+setloc::
+	cp	80h		;location counter set ?
+	jr	nz,adrcha
+setloc1:
+	push	af
+	call	getobj
+	push	hl
+	call	getobj
+	pop	hl
+	ld	h,a
+	ld	(loc),hl	;set loc
+	pop	af
+	or	a
+	jp	nz,rdnext
+	ld	(prgorg),hl
+	ex	de,hl
+	ld	hl,(frebga)
+	or	a
+	sbc	hl,de
+	ld	(offset),hl
+	jp	rdnext
+;
+adrcha::
+	cp	81h		;address chain ?
+	jr	nz,codobj
+	call	getobj
+	push	hl
+	call	getobj
+	pop	de
+	ld	d,a
+	ld	bc,(loc)
+adrcha1:
+	ld	hl,(offset)
+	add	hl,de
+	call	adrchk		;address check
+	ld	e,(hl)
+	inc	hl
+	ld	d,(hl)
+	ld	(hl),b		;address set
+	dec	hl
+	ld	(hl),c
+	ld	a,d
+	or	e
+	jr	nz,adrcha1
+	jp	rdnext
+;
+codobj:
+	cp	40h+1
+	jp	nc,badobj
+	ld	b,a
+	or	a
+	jr	nz,codobj1
+	inc	b
+codobj1:
+	push	bc
+	call	getobj
+	pop	bc
+	ld	hl,(loc)
+	inc	hl
+	ld	(loc),hl
+	dec	hl
+	ld	de,(offset)
+	add	hl,de
+	call	adrchk		;address check
+	ld	(hl),a		;store object code
+	djnz	codobj1
+	jp	rdnext
+;
+adrchk::
+	push	hl
+	ld	de,(frebga)
+	or	a
+	sbc	hl,de		;hl >= frebga ?
+	jp	c,badobj
+	pop	hl
+	push	hl
+	ld	de,(freeda)
+	or	a
+	sbc	hl,de		;hl < freeda ?
+	jp	nc,badobj
+	pop	hl
+	ret
+;
+endobj::
+	ld	a,(symotf)
+	or	a
+	call	nz,clsymf	;sym file close
+	ld	de,endadr
+	ld	c,printf
+	call	bdos
+	ld	hl,(loc)
+	dec	hl
+	call	prhex4		;print end address
+	ld	de,prgsiz
+	ld	c,printf
+	call	bdos
+	ld	hl,(loc)
+	ld	de,(prgorg)
+	or	a
+	sbc	hl,de
+	push	hl
+	call	prhex4		;print program size
+	ld	de,pagsz1
+	ld	c,printf
+	call	bdos
+	pop	hl
+	ld	de,0ffh
+	add	hl,de
+	ld	l,h
+	ld	h,0
+	call	prdec
+	ld	de,pagsz2
+	ld	c,printf
+	call	bdos
+;
+;	write hex file
+;
+wrhexf::
+	ld	hl,dfcb+9
+	ld	(hl),'H'
+	inc	hl
+	ld	(hl),'E'
+	inc	hl
+	ld	(hl),'X'	;set file type '.HEX'
+	inc	hl
+	ld	(hl),0		;reset dfcb.ex
+	ld	de,dfcb
+	push	de
+	ld	c,deletf
+	call	bdos		;delete old hex file
+	pop	de
+	ld	c,makef
+	call	bdos		;make new hex file
+	inc	a
+	jp	z,dirful
+	xor	a
+	ld	(dfcb+32),a	;reset dfcb.cr
+	ld	(bufptr),a
+;
+	ld	de,(prgorg)
+wrhexf1:
+	ld	hl,(loc)
+	or	a
+	sbc	hl,de		;de = loc ?
+	jr	z,wrhexf3
+	ld	b,16
+	ld	a,h
+	or	a
+	jr	nz,wrhexf1.5
+	ld	a,l
+	cp	b		;de-loc >= 16 ?
+	jr	nc,wrhexf1.5
+	ld	b,l
+wrhexf1.5:
+	push	de
+	push	bc
+	ld	a,':'
+	call	wrhf1		;write record mark ':'
+	pop	af
+	push	af
+	call	wrhex		;write record length (16 byte)
+	pop	af
+	pop	de
+	push	af
+	push	de
+	ld	a,d
+	call	wrhex
+	pop	de
+	push	de
+	ld	a,e
+	call	wrhex		;write location address
+	xor	a
+	call	wrhex		;write record type (00h)
+	pop	de
+	pop	af
+	ld	b,a
+	add	a,d
+	add	a,e
+	ld	c,a
+wrhexf2:
+	ld	hl,(offset)
+	add	hl,de
+	ld	a,(hl)
+	add	a,c
+	ld	c,a
+	ld	a,(hl)
+	inc	de
+	push	bc
+	push	de
+	call	wrhex		;write hex code
+	pop	de
+	pop	bc
+	djnz	wrhexf2
+	push	de
+	xor	a
+	sbc	a,c
+	call	wrhex		;write check sum
+	ld	a,cr
+	call	wrhf1
+	ld	a,lf
+	call	wrhf1		;write cr,lf
+	pop	de
+	jr	wrhexf1
+wrhexf3:
+	ld	hl,endrec
+wrhexf4:
+	ld	a,(hl)
+	or	a
+	jr	z,wrhexf5
+	inc	hl
+	push	hl
+	call	wrhf1		;write end record
+	pop	hl
+	jr	wrhexf4
+;
+endrec:	defb	':00000001FF',cr,lf,0
+;
+wrhexf5:
+	ld	a,eof
+	call	wrhf1		;eof write
+	ld	a,(bufptr)
+	or	a
+	jr	nz,wrhexf5
+	ld	de,dfcb
+	ld	c,closef
+	call	bdos		;close file
+	inc	a
+	jr	z,nocls
+	
+	ld	hl,movtpa
+	ld	de,(objmov)
+	push	de
+	ld	bc,movtpae-movtpa
+	ldir
+	ret			;chain
+;
+;	move object to tpa & return to os
+;
+movtpa::
+	ld	hl,(loc)
+	ld	de,(prgorg)
+	or	a
+	sbc	hl,de
+	jp	z,boot
+	ld	b,h
+	ld	c,l
+	ld	hl,(frebga)
+	ld	de,tpa
+	ldir			;move
+	ex	de,hl
+movtpa1:
+	ld	a,l
+	or	a
+	jp	z,boot		;return to os
+	ld	(hl),0
+	inc	hl
+	jr	movtpa1
+movtpae:
+;
+;	error
+;
+nofile:
+	ld	de,$+6
+	jp	error
+	defb	cr,lf,'%No object file$'
+dirful:
+	ld	de,$+6
+	jp	error
+	defb	cr,lf,'%No directory space$'
+dskful:
+	ld	de,$+6
+	jp	error
+	defb	cr,lf,'%Disk full$'
+nocls:
+	ld	de,$+6
+	jp	error
+	defb	cr,lf,'%Cannot close$'
+badobj:
+	ld	de,$+6
+	jp	error
+	defb	cr,lf,'%Bad object file$'
+;
+error:
+	ld	c,printf
+	call	bdos
+	jp	boot		;return to os
+;
+;	**  get object file  **
+;
+getobj::
+	ld	a,(bufptr)
+	cp	reclen
+	jr	c,getobj1
+	xor	a
+	ld	(bufptr),a
+	ld	de,dbuff
+	ld	c,setdmf
+	call	bdos		;set dma address
+	ld	de,dfcb
+	ld	c,readf
+	call	bdos		;read object file
+	or	a
+	jr	nz,badobj
+getobj1:
+	ld	hl,(bufptr)
+	ld	h,0
+	ld	de,dbuff
+	add	hl,de
+	ld	a,(hl)		; a = object
+	ld	hl,bufptr
+	inc	(hl)
+	ld	l,a
+	ret
+;
+;	**  write hex  **
+;
+wrhex:: ;	a: write data
+	call	binhex		;convert to hex
+	push	de
+	ld	a,d
+	call	wrhf1
+	pop	de
+	ld	a,e
+;
+wrhf1:
+	ld	hl,(bufptr)
+	ld	h,0
+	ld	de,dbuff
+	add	hl,de
+	ld	(hl),a
+	ld	hl,bufptr
+	inc	(hl)
+	ld	a,(hl)
+	cp	reclen
+	ret	c
+	ld	(hl),0
+	ld	de,dbuff
+	ld	c,setdmf
+	call	bdos		;set dma address
+	ld	de,dfcb
+	ld	c,writef
+	call	bdos		;write file
+	or	a
+	jp	nz,dskful
+	ret
+;
+;	**  print decimal  **
+;
+prdec:: ;	hl: print data
+	ld	d,0
+	ld	bc,10000
+	call	prdecs
+	ld	bc,1000
+	call	prdecs
+	ld	bc,100
+	call	prdecs
+	ld	bc,10
+	call	prdecs
+	ld	a,l
+	or	'0'
+	ld	e,a
+	ld	c,putchrf
+	jp	bdos
+;
+prdecs:
+	ld	e,'0'
+prdecs1:
+	or	a
+	sbc	hl,bc
+	inc	e
+	jr	nc,prdecs1
+	add	hl,bc
+	dec	e
+	ld	a,e
+	cp	'0'
+	jr	nz,prdecs2
+	dec	d
+	inc	d
+	ret	z
+prdecs2:
+	inc	d
+	push	hl
+	push	de
+	ld	c,putchrf
+	call	bdos
+	pop	de
+	pop	hl
+	ret
+;
+;	**  print hex  **
+;
+prhex4:: ;	hl: print data
+	push	hl
+	ld	a,h
+	call	prhex2
+	pop	hl
+	ld	a,l
+prhex2:
+	call	binhex		;convert to hex
+	push	de
+	ld	e,d
+	call	prhex1
+	pop	de
+prhex1:
+	ld	c,putchrf
+	jp	bdos
+;
+;	**  convert to hex  **
+;
+binhex:: ;	a : 8 bit binary
+	push	af
+	rrca
+	rrca
+	rrca
+	rrca
+	call	binhex1
+	ld	d,e
+	pop	af
+binhex1:
+	and	0fh
+	add	a,'0'
+	cp	'9'+1
+	jr	c,$+4
+	  add	a,'A'-'9'-1
+	ld	e,a
+	ret
+;
+;	**  make symbol file  **
+;
+mksyf1::
+	ld	hl,dfcb
+	ld	de,sfcb
+	push	de
+	ld	bc,9
+	ldir			;set symbol file fcb
+	ex	de,hl
+	ld	(hl),'S'
+	inc	hl
+	ld	(hl),'Y'
+	inc	hl
+	ld	(hl),'M'
+	inc	hl
+	xor	a
+	ld	(hl),a
+	inc	hl
+	ld	(hl),a
+	inc	hl
+	ld	(hl),a
+	ld	(sfcb+32),a	;clear sfcb.ex, s1, s2, cr
+	pop	de
+	push	de
+	ld	c,deletf
+	call	bdos		;delete old sym file
+	pop	de
+	ld	c,makef
+	call	bdos		;make new sym file
+	inc	a
+	jp	z,dirful
+	ld	hl,0
+	ld	(sbptr),hl
+	ld	a,0ffh
+	ld	(symotf),a
+	ret
+;
+;	**  write symbol file  **
+;
+wrsymf:: ;	a : write character
+	cp	'a'
+	jr	c,wrsymf0
+	cp	'z'+1
+	jr	nc,wrsymf0
+	sub	20h		;translate to upper case
+wrsymf0:
+	ld	hl,(sbptr)
+	push	hl
+	ld	de,symbuf
+	add	hl,de
+	ld	(hl),a		;buffer store
+	pop	hl
+	inc	hl
+	ld	(sbptr),hl
+	ld	de,sbsiz
+	or	a
+	sbc	hl,de		; sbptr >= sbsiz ?
+	ret	c
+;
+wrsymf1:
+	ld	hl,(sbptr)
+	ld	de,symbuf
+wrsymf2:
+	push	hl
+	push	de
+	ld	c,setdmf
+	call	bdos		;set dma address
+	ld	de,sfcb
+	ld	c,writef
+	call	bdos		;write file
+	or	a
+	jp	nz,dskful
+	ld	bc,reclen
+	pop	hl
+	add	hl,bc
+	ex	de,hl
+	pop	hl
+	or	a
+	sbc	hl,bc
+	jr	nz,wrsymf2
+	ld	(sbptr),hl
+	ret
+;
+;	**  close symbol file  **
+;
+clsymf::
+	ld	a,(symhcu)
+	or	a
+	jr	z,clsymf1
+	ld	a,cr
+	call	wrsymf
+	ld	a,lf
+	call	wrsymf
+clsymf1:
+	ld	de,(sbptr)
+clsymf2:
+	ld	hl,symbuf
+	add	hl,de
+	ld	(hl),eof
+	inc	de
+	ld	a,e
+	and	reclen-1
+	jr	nz,clsymf2
+	ld	(sbptr),de
+	call	wrsymf1		;disk write
+	ld	de,sfcb
+	ld	c,closef
+	call	bdos
+	inc	a
+	jp	z,nocls
+	ret
+;
+;
+$memry::	defs	2	;free area address ( LINK-80 set )
+
+
+;-----------------------------------------------------------
+;-			work area
+;-----------------------------------------------------------
+
+	dseg
+	
+bufptr::defs	1		;buffer pointer
+offset::defs	2		;address offset
+prgorg::defs	2		;program origin
+loc::	defs	2		;location counter
+frebga::defs	2		;free area beginning address
+freeda::defs	2		;free area ending address
+objmov::defs	2		;object tpa move routine entry address
+symotf::defs	1		;symbol file output flag
+sfcb::	defs	33		;symbol file fcb
+symhcu::defs	1		;symbol horizontal out count
+sbptr::	defs	2		;sym file output buffer pointer
+symbuf::defs	reclen*4		;symbol file output buffer
+sbsiz	equ	$-symbuf		;buffer size
+
+	end	start
+	

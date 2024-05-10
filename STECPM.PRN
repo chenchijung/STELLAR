@@ -1,0 +1,1575 @@
+Steller compiler CP/M-80,MSX-DOS support routine	MACRO-80 3.44	17-Feb-82	PAGE	1
+
+
+                                	title 	Steller compiler CP/M-80,MSX-DOS support routine
+                                	subttl 	REV 1.01 08/30/1984
+                                	name ('cpmmod')
+                                .Z80
+                                ;**************************************************
+                                ;*						  *
+                                ;*         Stellar compiler    in/out moudle      *
+                                ;*						  *
+                                ;*     CP/M-80 , MSX-DOS support routine          *
+                                ;*	   ( REV 1.01 )				  *
+                                ;*						  *
+                                ;*	Copyright (c) 1984 H.Ohnuki / MIA	  *
+                                ;*						  *
+                                ;**************************************************
+                                
+  0101                          rev	equ	101h	;revision 1.01
+                                
+                                ;--------------------------------------------------
+                                ;-		external symbol			  -
+                                ;--------------------------------------------------
+                                
+                                	external	optisw,lino,strbuf,cptr
+                                	external	codorg,datorg,stkbot,cloc,dloc
+                                	external	work.e
+                                	
+                                	external	compil,ptloc,ptname,synerr,gtoken
+                                	external	spskip,traupc
+                                ;--------------------------------------------------
+                                ;-		constant define			  -
+                                ;--------------------------------------------------
+                                
+  0100                          defcda	equ	0100h	;default code segment origin ( 0100h )
+  4000                          defdta	equ	4000h	;default data segment origin ( 4000h )
+                                
+  0006                          defsta	equ	0006h	;default stack bottom address
+  00FF                          dsaind	equ	0ffh	;sp set address ( 00h=direct, 0ffh=indirect )
+                                
+  0002                          stptyp	equ	2	;return type 2 : jump
+  0000                          retadr	equ	0000h	;return address: 0000h
+                                
+  0200                          symmax	equ	512	;max 512 symbol
+  0010                          symlen	equ	16	;1 symbol length = 16 byte
+  000C                          idelen	equ	12	;identifier length = 12 byte
+                                
+  000D                          cr	equ	0dh	;carrage return
+  000A                          lf	equ	0ah	;line feed
+  001A                          eof	equ	1ah	;end of file
+                                ;
+                                ;	CP/M-80,MSX-DOS interface
+                                ;
+  0080                          reclen	equ	128	;1 record = 128 byte
+                                
+  0000                          boot	equ	0000h	;system reboot entry
+  0005                          bdos	equ	0005h	;bdos entry
+  005C                          dfcb1	equ	005ch	;default fcb_1
+  006C                          dfcb2	equ	006ch	;default fcb_2
+Steller compiler CP/M-80,MSX-DOS support routine	MACRO-80 3.44	17-Feb-82	PAGE	1-1
+REV 1.01 08/30/1984
+
+                                
+  0002                          putchrf	equ	2	;put console character
+  0009                          printf	equ	9	;print string function
+  000F                          openf	equ	15	;open file function
+  0010                          closef	equ	16	;close file function
+  0013                          deletf	equ	19	;delete file function
+  0014                          readf	equ	20	;read next record
+  0015                          writef	equ	21	;write next record
+  0016                          makef	equ	22	;make file
+  001A                          setdmf	equ	26	;set dma function
+                                
+                                ;--------------------------------------------------
+                                ;-		global symbol			  -
+                                ;--------------------------------------------------
+                                
+                                	global		defsta,dsaind,stptyp,retadr
+                                	
+                                
+                                ;--------------------------------------------------
+                                ;-		p r o g r a m			  -
+                                ;--------------------------------------------------
+                                
+  0000'                         		cseg
+                                ;
+                                ;	** compile **
+                                ;	
+  0000'                         start::
+  0000'   2A 0006               	ld	hl,(bdos+1)
+  0003'   2E 00                 	ld	l,0
+  0005'   F9                    	ld	sp,hl		;set sp reg
+  0006'   11 0157'              	ld	de,stamsg
+  0009'   0E 09                 	ld	c,printf
+  000B'   CD 0005               	call	bdos		;print starting message
+                                ;
+  000E'   21 0000"              	ld	hl,work.b	;work zero clear
+  0011'   36 00                 	ld	(hl),0
+  0013'   11 0001"              	ld	de,work.b+1
+  0016'   01 FFFF*              	ld	bc,work.e-work.b-1
+  0019'   ED B0                 	ldir
+                                ;
+  001B'   3A 005D               	ld	a,(dfcb1+1)
+  001E'   FE 20                 	cp	' '		;source file name ok?
+  0020'   CA 024C'              	jp	z,nosou
+  0023'   21 0065               	ld	hl,dfcb1+9
+  0026'   7E                    	ld	a,(hl)
+  0027'   FE 20                 	cp	' '
+  0029'   20 08                 	jr	nz,stdftpl
+  002B'   36 53                 	ld	(hl),'S'
+  002D'   23                    	inc	hl
+  002E'   36 4F                 	ld	(hl),'O'
+  0030'   23                    	inc	hl
+  0031'   36 55                 	ld	(hl),'U'
+  0033'                         stdftpl:
+  0033'   01 0009               	ld	bc,9
+  0036'   21 005C               	ld	hl,dfcb1
+  0039'   11 006C               	ld	de,dfcb2
+Steller compiler CP/M-80,MSX-DOS support routine	MACRO-80 3.44	17-Feb-82	PAGE	1-2
+REV 1.01 08/30/1984
+
+  003C'   1A                    	ld	a,(de)
+  003D'   B7                    	or	a
+  003E'   28 03                 	jr	z,stdfdr
+  0040'   13                    	inc	de
+  0041'   23                    	inc	hl
+  0042'   0B                    	dec	bc
+  0043'                         stdfdr:
+  0043'   3A 006D               	ld	a,(dfcb2+1)
+  0046'   FE 20                 	cp	' '
+  0048'   20 02                 	jr	nz,stdftp2
+  004A'   ED B0                 	ldir			;move dfcb1 to dfcb2
+  004C'                         stdftp2:
+  004C'   21 0075               	ld	hl,dfcb2+9
+  004F'   7E                    	ld	a,(hl)
+  0050'   FE 20                 	cp	' '
+  0052'   20 08                 	jr	nz,mvofcb
+  0054'   36 4F                 	ld	(hl),'O'
+  0056'   23                    	inc	hl
+  0057'   36 42                 	ld	(hl),'B'
+  0059'   23                    	inc	hl
+  005A'   36 4A                 	ld	(hl),'J'	;set file type '.OBJ'
+  005C'                         mvofcb:
+  005C'   21 006C               	ld	hl,dfcb2
+  005F'   11 0019"              	ld	de,ofcb
+  0062'   01 0010               	ld	bc,16
+  0065'   ED B0                 	ldir			;move dfcb2 to ofcb
+                                ;
+  0067'   21 005D               	ld	hl,dfcb1+1
+  006A'   CD 014B'              	call	fnchk		;file name check
+  006D'   AF                    	xor	a
+  006E'   32 007C               	ld	(dfcb1+32),a	;reset dfcb1.cr
+  0071'   11 005C               	ld	de,dfcb1
+  0074'   0E 0F                 	ld	c,openf
+  0076'   CD 0005               	call	bdos		;open source file
+  0079'   3C                    	inc	a		;ok?
+  007A'   CA 024C'              	jp	z,nosou
+  007D'   21 0200               	ld	hl,sbfsiz
+  0080'   22 000B"              	ld	(sbrptr),hl
+  0083'   22 000D"              	ld	(sbrlen),hl
+                                ;
+  0086'   21 001A"              	ld	hl,ofcb+1
+  0089'   CD 014B'              	call	fnchk		;file name check
+  008C'   11 0019"              	ld	de,ofcb
+  008F'   D5                    	push	de
+  0090'   0E 13                 	ld	c,deletf
+  0092'   CD 0005               	call	bdos		;delete old object file
+  0095'   D1                    	pop	de
+  0096'   0E 16                 	ld	c,makef
+  0098'   CD 0005               	call	bdos		;make new object file
+  009B'   3C                    	inc	a
+  009C'   CA 0264'              	jp	z,dirful
+  009F'   AF                    	xor	a
+  00A0'   32 0039"              	ld	(ofcb+32),a	;reset ofcb.cr
+  00A3'   67                    	ld	h,a
+  00A4'   6F                    	ld	l,a
+  00A5'   22 0013"              	ld	(obsptr),hl
+Steller compiler CP/M-80,MSX-DOS support routine	MACRO-80 3.44	17-Feb-82	PAGE	1-3
+REV 1.01 08/30/1984
+
+  00A8'   22 0000"              	ld	(errcou),hl	;clrar error counter
+                                ;
+  00AB'   23                    	inc	hl
+  00AC'   22 0002"              	ld	(slino),hl
+  00AF'   21 0100               	ld	hl,defcda
+  00B2'   22 0000*              	ld	(codorg),hl	;set default code segment origin
+  00B5'   21 4000               	ld	hl,defdta
+  00B8'   22 0000*              	ld	(datorg),hl	;set default data segment origin
+  00BB'   CD 0000*              	call	compil		;compile
+                                ;
+  00BE'   2A 0013"              	ld	hl,(obsptr)
+  00C1'   54                    	ld	d,h
+  00C2'   5D                    	ld	e,l
+  00C3'   01 055D"              	ld	bc,objobf
+  00C6'   09                    	add	hl,bc
+  00C7'                         objcls1:
+  00C7'   7B                    	ld	a,e
+  00C8'   E6 7F                 	and	reclen-1
+  00CA'   28 06                 	jr	z,objcls2
+  00CC'   36 FF                 	ld	(hl),0ffh	;0ffh = end mark
+  00CE'   13                    	inc	de
+  00CF'   23                    	inc	hl
+  00D0'   18 F5                 	jr	objcls1
+  00D2'                         objcls2:
+  00D2'   EB                    	ex	de,hl
+  00D3'   CD 0713'              	call	wrobuf		;write object buffer
+  00D6'   11 0019"              	ld	de,ofcb 
+  00D9'   0E 10                 	ld	c,closef
+  00DB'   CD 0005               	call	bdos		;close object file
+  00DE'   3C                    	inc	a
+  00DF'   CA 0293'              	jp	z,nocls
+                                	
+  00E2'   11 01B1'              	ld	de,crlf
+  00E5'   0E 09                 	ld	c,printf
+  00E7'   CD 0005               	call	bdos
+  00EA'   11 01B4'              	ld	de,strpro
+  00ED'   ED 4B 0000*           	ld	bc,(cloc)
+  00F1'   2A 0000*              	ld	hl,(codorg)
+  00F4'   CD 020D'              	call	prszad		;print code size,address
+  00F7'   11 01C0'              	ld	de,strdat
+  00FA'   ED 4B 0000*           	ld	bc,(dloc)
+  00FE'   2A 0000*              	ld	hl,(datorg)
+  0101'   CD 020D'              	call	prszad		;print date size,address
+  0104'   3A 0000*              	ld	a,(optisw)
+  0107'   CB 6F                 	bit	5,a		;%s off?
+  0109'   28 17                 	jr	z,cend
+  010B'   11 01CC'              	ld	de,strsta1
+  010E'   0E 09                 	ld	c,printf
+  0110'   CD 0005               	call	bdos
+  0113'   2A 0000*              	ld	hl,(stkbot)
+  0116'   2B                    	dec	hl
+  0117'   CD 0308'              	call	prhex4		;print stack bottom address
+  011A'   11 01E3'              	ld	de,strsta2
+  011D'   0E 09                 	ld	c,printf
+  011F'   CD 0005               	call	bdos
+  0122'                         cend:
+Steller compiler CP/M-80,MSX-DOS support routine	MACRO-80 3.44	17-Feb-82	PAGE	1-4
+REV 1.01 08/30/1984
+
+  0122'   11 01E5'              	ld	de,edmsg
+  0125'   0E 09                 	ld	c,printf
+  0127'   CD 0005               	call	bdos
+  012A'   2A 0000"              	ld	hl,(errcou)
+  012D'   7C                    	ld	a,h
+  012E'   B5                    	or	l		;no error?
+  012F'   20 0A                 	jr	nz,cend1
+  0131'   11 01FE'              	ld	de,noerr
+  0134'   0E 09                 	ld	c,printf
+  0136'   CD 0005               	call	bdos		;print "No error(s)"
+  0139'   18 05                 	jr	cend2
+  013B'                         cend1:
+  013B'   3E 03                 	ld	a,3
+  013D'   CD 0328'              	call	prdec5		;print error count
+  0140'                         cend2:
+  0140'   11 0201'              	ld	de,errcum
+  0143'   0E 09                 	ld	c,printf
+  0145'   CD 0005               	call	bdos
+  0148'   C3 0000               	jp	boot		;return to os
+                                ;
+                                ;	** file name check **
+                                ;
+  014B'                         fnchk::	;	hl: bcb.fl address
+  014B'   06 0B                 	ld	b,8+3
+  014D'                         fnchk1:
+  014D'   7E                    	ld	a,(hl)
+  014E'   FE 3F                 	cp	'?'
+  0150'   CA 02C2'              	jp	z,badfil
+  0153'   23                    	inc	hl
+  0154'   10 F7                 	djnz	fnchk1
+  0156'   C9                    	ret
+                                ;
+                                ;	message
+                                ;
+  0157'   0D 0A 53 74           stamsg:	defb	cr,lf,'Stellar compiler Rev '
+  015B'   65 6C 6C 61           
+  015F'   72 20 63 6F           
+  0163'   6D 70 69 6C           
+  0167'   65 72 20 52           
+  016B'   65 76 20              
+  016E'   31 2E 30 31           	defb	rev/100h+'0','.',(rev/10h and 0fh)+'0',(rev and 0fh)+'0'
+  0172'   20 28 20 43           	defb	' ( CP/M-80,MSX-DOS Version )'
+  0176'   50 2F 4D 2D           
+  017A'   38 30 2C 4D           
+  017E'   53 58 2D 44           
+  0182'   4F 53 20 56           
+  0186'   65 72 73 69           
+  018A'   6F 6E 20 29           
+  018E'   0D 0A 43 6F           	defb	cr,lf,'Copyright (c) 1984 H.Ohnuki / MIA'
+  0192'   70 79 72 69           
+  0196'   67 68 74 20           
+  019A'   28 63 29 20           
+  019E'   31 39 38 34           
+  01A2'   20 48 2E 4F           
+  01A6'   68 6E 75 6B           
+  01AA'   69 20 2F 20           
+Steller compiler CP/M-80,MSX-DOS support routine	MACRO-80 3.44	17-Feb-82	PAGE	1-5
+REV 1.01 08/30/1984
+
+  01AE'   4D 49 41              
+  01B1'   0D 0A 24              crlf:	defb	cr,lf,'$'
+  01B4'   0D 0A 50 72           strpro:	defb	cr,lf,'Program  $'
+  01B8'   6F 67 72 61           
+  01BC'   6D 20 20 24           
+  01C0'   0D 0A 44 61           strdat:	defb	cr,lf,'Data     $'
+  01C4'   74 61 20 20           
+  01C8'   20 20 20 24           
+  01CC'   0D 0A 53 74           strsta1:defb	cr,lf,'Stack bottom  (    -$'
+  01D0'   61 63 6B 20           
+  01D4'   62 6F 74 74           
+  01D8'   6F 6D 20 20           
+  01DC'   28 20 20 20           
+  01E0'   20 2D 24              
+  01E3'   29 24                 strsta2:defb	')$'
+  01E5'   0D 0A 0A 2A           edmsg:	defb	cr,lf,lf,'**  End of compile.  $'
+  01E9'   2A 20 20 45           
+  01ED'   6E 64 20 6F           
+  01F1'   66 20 63 6F           
+  01F5'   6D 70 69 6C           
+  01F9'   65 2E 20 20           
+  01FD'   24                    
+  01FE'   4E 6F 24              noerr:	defb	'No$'
+  0201'   20 65 72 72           errcum:	defb	' error(s)',cr,lf,'$'
+  0205'   6F 72 28 73           
+  0209'   29 0D 0A 24           
+                                ;
+                                ;	print size,address
+                                ;
+  020D'                         prszad:
+  020D'   C5                    	push	bc
+  020E'   E5                    	push	hl
+  020F'   0E 09                 	ld	c,printf
+  0211'   CD 0005               	call	bdos		;print string
+  0214'   D1                    	pop	de
+  0215'   E1                    	pop	hl
+  0216'   E5                    	push	hl
+  0217'   D5                    	push	de
+  0218'   B7                    	or	a
+  0219'   ED 52                 	sbc	hl,de		; hl = size ( byte )
+  021B'   7C                    	ld	a,h
+  021C'   B5                    	or	l
+  021D'   F5                    	push	af
+  021E'   CD 0308'              	call	prhex4
+  0221'   F1                    	pop	af
+  0222'   28 25                 	jr	z,prszad1
+  0224'   1E 20                 	ld	e,' '
+  0226'   0E 02                 	ld	c,putchrf
+  0228'   CD 0005               	call	bdos
+  022B'   1E 28                 	ld	e,'('
+  022D'   0E 02                 	ld	c,putchrf
+  022F'   CD 0005               	call	bdos
+  0232'   E1                    	pop	hl
+  0233'   CD 0308'              	call	prhex4
+  0236'   1E 2D                 	ld	e,'-'
+  0238'   0E 02                 	ld	c,putchrf
+Steller compiler CP/M-80,MSX-DOS support routine	MACRO-80 3.44	17-Feb-82	PAGE	1-6
+REV 1.01 08/30/1984
+
+  023A'   CD 0005               	call	bdos
+  023D'   E1                    	pop	hl
+  023E'   2B                    	dec	hl
+  023F'   CD 0308'              	call	prhex4
+  0242'   1E 29                 	ld	e,')'
+  0244'   0E 02                 	ld	c,putchrf
+  0246'   C3 0005               	jp	bdos
+  0249'                         prszad1:
+  0249'   F1                    	pop	af
+  024A'   F1                    	pop	af		; sp := sp + 4
+  024B'   C9                    	ret
+                                ;
+                                ;	I/O error
+                                ;
+  024C'                         nosou:
+  024C'   11 0252'              	ld	de,$+6
+  024F'   C3 02F8'              	jp	errprt
+  0252'   0D 0A 25 4E           	defb	cr,lf,'%No source file$'
+  0256'   6F 20 73 6F           
+  025A'   75 72 63 65           
+  025E'   20 66 69 6C           
+  0262'   65 24                 
+  0264'                         dirful:
+  0264'   11 026A'              	ld	de,$+6
+  0267'   C3 02F8'              	jp	errprt
+  026A'   0D 0A 25 4E           	defb	cr,lf,'%No directory space$'
+  026E'   6F 20 64 69           
+  0272'   72 65 63 74           
+  0276'   6F 72 79 20           
+  027A'   73 70 61 63           
+  027E'   65 24                 
+  0280'                         dskful:
+  0280'   11 0286'              	ld	de,$+6
+  0283'   C3 02F8'              	jp	errprt
+  0286'   0D 0A 25 44           	defb	cr,lf,'%Disk full$'
+  028A'   69 73 6B 20           
+  028E'   66 75 6C 6C           
+  0292'   24                    
+  0293'                         nocls:
+  0293'   11 0299'              	ld	de,$+6
+  0296'   C3 02F8'              	jp	errprt
+  0299'   0D 0A 25 43           	defb	cr,lf,'%Cannot close$'
+  029D'   61 6E 6E 6F           
+  02A1'   74 20 63 6C           
+  02A5'   6F 73 65 24           
+  02A9'                         badsou:
+  02A9'   11 02AF'              	ld	de,$+6
+  02AC'   C3 02F8'              	jp	errprt
+  02AF'   0D 0A 25 42           	defb	cr,lf,'%Bad source file$'
+  02B3'   61 64 20 73           
+  02B7'   6F 75 72 63           
+  02BB'   65 20 66 69           
+  02BF'   6C 65 24              
+  02C2'                         badfil:
+  02C2'   11 02C8'              	ld	de,$+6
+  02C5'   C3 02F8'              	jp	errprt
+Steller compiler CP/M-80,MSX-DOS support routine	MACRO-80 3.44	17-Feb-82	PAGE	1-7
+REV 1.01 08/30/1984
+
+  02C8'   0D 0A 25 42           	defb	cr,lf,'%Bad file name$'
+  02CC'   61 64 20 66           
+  02D0'   69 6C 65 20           
+  02D4'   6E 61 6D 65           
+  02D8'   24                    
+  02D9'                         sytovf:
+  02D9'   11 02DF'              	ld	de,$+6
+  02DC'   C3 02F8'              	jp	errprt
+  02DF'   0D 0A 25 53           	defb	cr,lf,'%Symbol table overflow$'
+  02E3'   79 6D 62 6F           
+  02E7'   6C 20 74 61           
+  02EB'   62 6C 65 20           
+  02EF'   6F 76 65 72           
+  02F3'   66 6C 6F 77           
+  02F7'   24                    
+                                ;
+  02F8'                         errprt:
+  02F8'   0E 09                 	ld	c,printf
+  02FA'   CD 0005               	call	bdos
+  02FD'   11 01B1'              	ld	de,crlf
+  0300'   0E 09                 	ld	c,printf
+  0302'   CD 0005               	call	bdos
+  0305'   C3 0000               	jp	boot		;roturn to os
+                                ;
+                                ;	**  print hex  **
+                                ;
+  0308'                         prhex4::	;hl: output data
+  0308'   E5                    	push	hl
+  0309'   7C                    	ld	a,h
+  030A'   CD 030F'              	call	prhex2
+  030D'   E1                    	pop	hl
+  030E'   7D                    	ld	a,l
+                                ;
+  030F'                         prhex2::
+  030F'   F5                    	push	af
+  0310'   0F                    	rrca
+  0311'   0F                    	rrca
+  0312'   0F                    	rrca
+  0313'   0F                    	rrca
+  0314'   CD 0318'              	call	prhex1
+  0317'   F1                    	pop	af
+                                ;
+  0318'                         prhex1::
+  0318'   E6 0F                 	and	0fh
+  031A'   C6 30                 	add	a,'0'
+  031C'   FE 3A                 	cp	'9'+1
+  031E'   38 02                 	jr	c,$+4
+  0320'   C6 07                 	add	a,'A'-'9'-1
+  0322'   5F                    	ld	e,a
+  0323'   0E 02                 	ld	c,putchrf
+  0325'   C3 0005               	jp	bdos
+                                ;
+                                ;	**  print decimal  **
+                                ;
+  0328'                         prdec5:: ;	a : 00h=no zero suppression
+                                	 ;	    02h=zero suppression. fixed print  ( 5 digit )
+Steller compiler CP/M-80,MSX-DOS support routine	MACRO-80 3.44	17-Feb-82	PAGE	1-8
+REV 1.01 08/30/1984
+
+                                	 ;	    03=zero suppression, varying print ( 1...5 digit )
+                                	 ;	hl: output data
+  0328'   57                    	ld	d,a
+  0329'   01 2710               	ld	bc,10000
+  032C'   CD 034A'              	call	prdecs
+  032F'   01 03E8               	ld	bc,1000
+  0332'   CD 034A'              	call	prdecs
+  0335'   01 0064               	ld	bc,100
+  0338'   CD 034A'              	call	prdecs
+  033B'   01 000A               	ld	bc,10
+  033E'   CD 034A'              	call	prdecs
+  0341'   7D                    	ld	a,l
+  0342'   F6 30                 	or	'0'
+  0344'   5F                    	ld	e,a
+  0345'   0E 02                 	ld	c,putchrf
+  0347'   C3 0005               	jp	bdos
+                                ;
+  034A'                         prdecs:
+  034A'   1E 30                 	ld	e,'0'
+  034C'                         prdecs1:
+  034C'   B7                    	or	a
+  034D'   ED 42                 	sbc	hl,bc
+  034F'   1C                    	inc	e
+  0350'   30 FA                 	jr	nc,prdecs1
+  0352'   09                    	add	hl,bc
+  0353'   1D                    	dec	e
+  0354'   CB 4A                 	bit	1,d
+  0356'   28 0D                 	jr	z,prdecs3
+  0358'   7B                    	ld	a,e
+  0359'   FE 30                 	cp	'0'
+  035B'   20 06                 	jr	nz,prdecs2
+  035D'   CB 42                 	bit	0,d
+  035F'   C0                    	ret	nz
+  0360'   1E 20                 	ld	e,' '
+  0362'   01                    	defb	01h
+  0363'                         prdecs2:
+  0363'   CB 8A                 	res	1,d
+  0365'                         prdecs3:
+  0365'   E5                    	push	hl
+  0366'   D5                    	push	de
+  0367'   0E 02                 	ld	c,putchrf
+  0369'   CD 0005               	call	bdos
+  036C'   D1                    	pop	de
+  036D'   E1                    	pop	hl
+  036E'   C9                    	ret
+                                ;
+                                ;	**  abort  **
+                                ;
+  036F'   11 037A'              abort::	ld	de,abtms
+  0372'   0E 09                 	ld	c,printf
+  0374'   CD 0005               	call	bdos
+  0377'   C3 0122'              	jp	cend
+                                ;
+  037A'   0D 0A 25 41           abtms:	defb	cr,lf,'%Abort$'
+  037E'   62 6F 72 74           
+  0382'   24                    
+Steller compiler CP/M-80,MSX-DOS support routine	MACRO-80 3.44	17-Feb-82	PAGE	1-9
+REV 1.01 08/30/1984
+
+                                ;
+                                ;	**  error  **
+                                ;	
+  0383'                         error::	;	hl: error message address (nul end string)
+                                	;	de: sub message address   (nul end string)
+  0383'   ED 53 005B"           	ld	(sbmsad),de
+  0387'   2B                    	dec	hl
+  0388'   E5                    	push	hl
+  0389'   11 01B1'              	ld	de,crlf
+  038C'   0E 09                 	ld	c,printf
+  038E'   CD 0005               	call	bdos
+  0391'                         error1:
+  0391'   E1                    	pop	hl
+  0392'   23                    	inc	hl
+  0393'   7E                    	ld	a,(hl)
+  0394'   B7                    	or	a
+  0395'   28 3E                 	jr	z,error5
+  0397'   E5                    	push	hl
+  0398'   FE 23                 	cp	'#'
+  039A'   20 15                 	jr	nz,error2
+  039C'   2A 0000*              	ld	hl,(lino)
+  039F'   3E 02                 	ld	a,2
+  03A1'   CD 0328'              	call	prdec5		;print line number
+  03A4'   11 03AE'              	ld	de,error1.5
+  03A7'   0E 09                 	ld	c,printf
+  03A9'   CD 0005               	call	bdos
+  03AC'   18 E3                 	jr	error1
+  03AE'   3A 20 24              error1.5:	defb	': $'
+  03B1'                         error2:	
+  03B1'   FE 40                 	cp	'@'
+  03B3'   20 0C                 	jr	nz,error3
+  03B5'   E1                    	pop	hl
+  03B6'   23                    	inc	hl
+  03B7'   5E                    	ld	e,(hl)
+  03B8'   23                    	inc	hl
+  03B9'   56                    	ld	d,(hl)
+  03BA'   E5                    	push	hl
+  03BB'   EB                    	ex	de,hl
+  03BC'   CD 03F0'              	call	prtmsg		;print sub message
+  03BF'   18 D0                 	jr	error1
+  03C1'                         error3:
+  03C1'   FE 5C                 	cp	'\'
+  03C3'   20 08                 	jr	nz,error4
+  03C5'   2A 005B"              	ld	hl,(sbmsad)
+  03C8'   CD 03F0'              	call	prtmsg		;print sub message
+  03CB'   18 C4                 	jr	error1
+  03CD'                         error4:
+  03CD'   5F                    	ld	e,a
+  03CE'   0E 02                 	ld	c,putchrf
+  03D0'   CD 0005               	call	bdos
+  03D3'   18 BC                 	jr	error1
+                                ;
+  03D5'                         error5:
+  03D5'   2A 0000"              	ld	hl,(errcou)
+  03D8'   23                    	inc	hl
+  03D9'   22 0000"              	ld	(errcou),hl
+Steller compiler CP/M-80,MSX-DOS support routine	MACRO-80 3.44	17-Feb-82	PAGE	1-10
+REV 1.01 08/30/1984
+
+  03DC'   11 01B1'              	ld	de,crlf
+  03DF'   0E 09                 	ld	c,printf
+  03E1'   CD 0005               	call	bdos
+  03E4'   21 005D"              	ld	hl,linbuf
+  03E7'   3A 000A"              	ld	a,(inclf)
+  03EA'   B7                    	or	a
+  03EB'   28 03                 	jr	z,$+5
+  03ED'   21 00DD"              	ld	hl,ilibuf
+                                ;
+                                ;	**  print message  **
+                                ;
+  03F0'                         prtmsg:: ;	hl: string address (nul code end)
+  03F0'   7E                    	ld	a,(hl)
+  03F1'   B7                    	or	a
+  03F2'   C8                    	ret	z
+  03F3'   E5                    	push	hl
+  03F4'   5F                    	ld	e,a
+  03F5'   0E 02                 	ld	c,putchrf
+  03F7'   CD 0005               	call	bdos
+  03FA'   E1                    	pop	hl
+  03FB'   23                    	inc	hl
+  03FC'   18 F2                 	jr	prtmsg
+                                ;
+                                ;	**  make fcb  **
+                                ;
+  03FE'                         mkfcb::	;	de: fcb address
+                                	;	hl: file name
+  03FE'   CD 0000*              	call	spskip		;space ship
+  0401'   EB                    	ex	de,hl
+  0402'   1A                    	ld	a,(de)
+  0403'   B7                    	or	a
+  0404'   28 0D                 	jr	z,mkfcb1
+  0406'   CD 0000*              	call	traupc		;translate to upper case
+  0409'   D6 40                 	sub	'@'
+  040B'   4F                    	ld	c,a
+  040C'   13                    	inc	de
+  040D'   1A                    	ld	a,(de)
+  040E'   FE 3A                 	cp	':'
+  0410'   28 05                 	jr	z,mkfcb2
+  0412'   1B                    	dec	de
+  0413'                         mkfcb1:
+  0413'   36 00                 	ld	(hl),0
+  0415'   18 02                 	jr	mkfcb3
+  0417'                         mkfcb2:
+  0417'   71                    	ld	(hl),c		;set fcb.dr
+  0418'   13                    	inc	de
+  0419'                         mkfcb3:
+  0419'   06 08                 	ld	b,8		;set fcb.f1 ... fcb.f8
+  041B'   23                    	inc	hl
+  041C'                         mkfcb4:
+  041C'   CD 0460'              	call	chckfc		;character check
+  041F'   28 0D                 	jr	z,mkfcb6
+  0421'   77                    	ld	(hl),a
+  0422'   13                    	inc	de
+  0423'   23                    	inc	hl
+  0424'   10 F6                 	djnz	mkfcb4
+Steller compiler CP/M-80,MSX-DOS support routine	MACRO-80 3.44	17-Feb-82	PAGE	1-11
+REV 1.01 08/30/1984
+
+  0426'                         mkfcb5:
+  0426'   CD 0460'              	call	chckfc
+  0429'   28 08                 	jr	z,mkfcb7
+  042B'   13                    	inc	de
+  042C'   18 F8                 	jr	mkfcb5
+  042E'                         mkfcb6:
+  042E'   36 20                 	ld	(hl),' '
+  0430'   23                    	inc	hl
+  0431'   10 FB                 	djnz	mkfcb6
+  0433'                         mkfcb7:
+  0433'   06 03                 	ld	b,3		;set fcb.t1 ... fcb.t3
+  0435'   FE 2E                 	cp	'.'
+  0437'   20 13                 	jr	nz,mkfcb10
+  0439'   13                    	inc	de
+  043A'                         mkfcb8:
+  043A'   CD 0460'              	call	chckfc		;character check
+  043D'   28 0D                 	jr	z,mkfcb10
+  043F'   77                    	ld	(hl),a
+  0440'   13                    	inc	de
+  0441'   23                    	inc	hl
+  0442'   10 F6                 	djnz 	mkfcb8
+  0444'                         mkfcb9:
+  0444'   CD 0460'              	call	chckfc
+  0447'   28 08                 	jr	z,mkfcb11
+  0449'   13                    	inc	de
+  044A'   18 F8                 	jr	mkfcb9
+  044C'                         mkfcb10:
+  044C'   36 20                 	ld	(hl),' '
+  044E'   23                    	inc	hl
+  044F'   10 FB                 	djnz	mkfcb10
+  0451'                         mkfcb11:
+  0451'   06 03                 	ld	b,3
+  0453'   AF                    	xor	a		; clear fcb.ex .si .s2
+  0454'                         mkfcb12:
+  0454'   77                    	ld	(hl),a
+  0455'   23                    	inc	hl
+  0456'   10 FC                 	djnz	mkfcb12
+  0458'   01 0011               	ld	bc,17
+  045B'   09                    	add	hl,bc
+  045C'   77                    	ld	(hl),a		;clrar fcb.rc
+  045D'   EB                    	ex	de,hl
+  045E'   B7                    	or	a		; cy=0 :make ok!
+  045F'   C9                    	ret
+                                ;
+  0460'                         chckfc:
+  0460'   1A                    	ld	a,(de)
+  0461'   CD 0000*              	call	traupc		;translate to upper case
+  0464'   B7                    	or	a
+  0465'   C8                    	ret	z
+  0466'   FE 20                 	cp	' '
+  0468'   C8                    	ret	z
+  0469'   38 22                 	jr	c,nomak
+  046B'   FE 2E                 	cp	'.'
+  046D'   C8                    	ret	z
+  046E'   FE 2C                 	cp	','
+  0470'   C8                    	ret	z
+Steller compiler CP/M-80,MSX-DOS support routine	MACRO-80 3.44	17-Feb-82	PAGE	1-12
+REV 1.01 08/30/1984
+
+  0471'   FE 3A                 	cp	':'
+  0473'   C8                    	ret	z
+  0474'   FE 3B                 	cp	';'
+  0476'   C8                    	ret	z
+  0477'   FE 3C                 	cp	'<'
+  0479'   C8                    	ret	z
+  047A'   FE 3D                 	cp	'='
+  047C'   C8                    	ret	z
+  047D'   FE 3E                 	cp	'>'
+  047F'   C8                    	ret	z
+  0480'   FE 5B                 	cp	'['
+  0482'   C8                    	ret	z
+  0483'   FE 5D                 	cp	']'
+  0485'   C8                    	ret	z		; z=1 : delimiting character
+  0486'   FE 3F                 	cp	'?'
+  0488'   28 03                 	jr	z,nomak
+  048A'   FE 2A                 	cp	'*'
+  048C'   C0                    	ret	nz		; z=0 : non delimiting character
+  048D'                         nomak:	
+  048D'   F1                    	pop	af
+  048E'   37                    	scf			; cy=1 : bad file name
+  048F'   C9                    	ret
+                                ;
+                                ;	**  include file open  **
+                                ;
+  0490'                         inclu::
+  0490'   3A 000A"              	ld	a,(inclf)
+  0493'   B7                    	or	a
+  0494'   C2 0000*              	jp	nz,synerr
+  0497'   2A 0000*              	ld	hl,(cptr)
+  049A'   CD 0000*              	call	spskip
+  049D'   E5                    	push	hl
+  049E'   11 003A"              	ld	de,ifcb
+  04A1'   CD 03FE'              	call	mkfcb		;make fcb
+  04A4'   DA 0553'              	jp	c,badifl
+  04A7'   22 0000*              	ld	(cptr),hl
+  04AA'   E5                    	push	hl
+  04AB'   CD 0000*              	call	gtoken
+  04AE'   FE 3B                 	cp	';'
+  04B0'   C2 0000*              	jp	nz,synerr
+  04B3'   11 003A"              	ld	de,ifcb
+  04B6'   0E 0F                 	ld	c,openf
+  04B8'   CD 0005               	call	bdos		; file open
+  04BB'   3C                    	inc	a
+  04BC'   CA 0573'              	jp	z,noifl
+  04BF'   21 0200               	ld	hl,ibfsiz
+  04C2'   22 000F"              	ld	(ibrptr),hl
+  04C5'   22 0011"              	ld	(ibrlen),hl
+                                ;
+  04C8'   3E FF                 	ld	a,0ffh
+  04CA'   32 000A"              	ld	(inclf),a
+  04CD'   2A 0000*              	ld	hl,(cptr)
+  04D0'   22 0006"              	ld	(cptr1),hl
+  04D3'   2A 0000*              	ld	hl,(lino)
+  04D6'   22 0004"              	ld	(lino1),hl
+  04D9'   2A 0002"              	ld	hl,(slino)
+Steller compiler CP/M-80,MSX-DOS support routine	MACRO-80 3.44	17-Feb-82	PAGE	1-13
+REV 1.01 08/30/1984
+
+  04DC'   22 0008"              	ld	(slino1),hl
+  04DF'   21 0001               	ld	hl,1
+  04E2'   22 0002"              	ld	(slino),hl
+  04E5'   21 00DD"              	ld	hl,ilibuf
+  04E8'   22 0000*              	ld	(cptr),hl
+  04EB'   36 00                 	ld	(hl),0
+                                ;
+  04ED'   21 050A'              	ld	hl,inclflm		;print include file name
+  04F0'   CD 03F0'              	call	prtmsg
+  04F3'   E1                    	pop	hl
+  04F4'   D1                    	pop	de
+  04F5'   B7                    	or	a
+  04F6'   ED 52                 	sbc	hl,de
+  04F8'   EB                    	ex	de,hl
+  04F9'                         prifnl:
+  04F9'   7A                    	ld	a,d
+  04FA'   B3                    	or	e
+  04FB'   C8                    	ret	z
+  04FC'   D5                    	push	de
+  04FD'   E5                    	push	hl
+  04FE'   5E                    	ld	e,(hl)
+  04FF'   0E 02                 	ld	c,putchrf
+  0501'   CD 0005               	call	bdos
+  0504'   E1                    	pop	hl
+  0505'   D1                    	pop	de
+  0506'   23                    	inc	hl
+  0507'   1B                    	dec	de
+  0508'   18 EF                 	jr	prifnl
+                                ;
+  050A'   0D 0A 2A 2A           inclflm:defb	cr,lf,'**  Include : ',0
+  050E'   20 20 49 6E           
+  0512'   63 6C 75 64           
+  0516'   65 20 3A 20           
+  051A'   00                    
+                                ;
+                                ;	**  end of include  **
+                                ;
+  051B'                         edincl::
+  051B'   3A 000A"              	ld	a,(inclf)
+  051E'   B7                    	or	a
+  051F'   C8                    	ret	z		;cy=0 : end of source
+  0520'   AF                    	xor	a
+  0521'   32 000A"              	ld	(inclf),a
+  0524'   21 053E'              	ld	hl,edicm
+  0527'   CD 03F0'              	call	prtmsg
+  052A'   2A 0004"              	ld	hl,(lino1)
+  052D'   22 0000*              	ld	(lino),hl
+  0530'   2A 0008"              	ld	hl,(slino1)
+  0533'   22 0002"              	ld	(slino),hl
+  0536'   2A 0006"              	ld	hl,(cptr1)
+  0539'   22 0000*              	ld	(cptr),hl
+  053C'   37                    	scf			; cy=1 : end of include
+  053D'   C9                    	ret
+                                ;
+  053E'   0D 0A 2A 2A           edicm:	defb	cr,lf,'**  End of include',0
+  0542'   20 20 45 6E           
+Steller compiler CP/M-80,MSX-DOS support routine	MACRO-80 3.44	17-Feb-82	PAGE	1-14
+REV 1.01 08/30/1984
+
+  0546'   64 20 6F 66           
+  054A'   20 69 6E 63           
+  054E'   6C 75 64 65           
+  0552'   00                    
+                                ;
+                                ;	**  include error  **
+                                ;
+  0553'                         badifl:
+  0553'   21 055C'              	ld	hl,badiflm
+  0556'   CD 0383'              	call	error
+  0559'   C3 036F'              	jp	abort
+  055C'   23 42 61 64           badiflm:defb	'#Bad include file name',0
+  0560'   20 69 6E 63           
+  0564'   6C 75 64 65           
+  0568'   20 66 69 6C           
+  056C'   65 20 6E 61           
+  0570'   6D 65 00              
+                                ;
+  0573'                         noifl:
+  0573'   21 057C'              	ld	hl,noiflm
+  0576'   CD 0383'              	call	error
+  0579'   C3 036F'              	jp	abort
+  057C'   23 4E 6F 20           noiflm:	defb	'#No include file',0
+  0580'   69 6E 63 6C           
+  0584'   75 64 65 20           
+  0588'   66 69 6C 65           
+  058C'   00                    
+                                ;
+                                ;	**  break, tron, troff  **
+                                ;	
+  058D'                         pbreak::
+  058D'   11 0593'              	ld	de,$+6
+  0590'   C3 05B3'              	jp	nosup
+  0593'   25 62 72 65           	defb	'%break',0
+  0597'   61 6B 00              
+  059A'                         tron::
+  059A'   11 05A0'              	ld	de,$+6
+  059D'   C3 05B3'              	jp	nosup
+  05A0'   25 74 72 6F           	defb	'%tron',0
+  05A4'   6E 00                 
+  05A6'                         troff::
+  05A6'   11 05AC'              	ld	de,$+6
+  05A9'   C3 05B3'              	jp	nosup
+  05AC'   25 74 72 6F           	defb	'%troff',0
+  05B0'   66 66 00              
+  05B3'                         nosup:
+  05B3'   3A 0000*              	ld	a,(optisw)
+  05B6'   CB 67                 	bit	4,a		;%debug sw on ?
+  05B8'   C8                    	ret	z
+  05B9'   21 05C7'              	ld	hl,nosupm
+  05BC'   CD 0383'              	call	error
+  05BF'   2A 0000"              	ld	hl,(errcou)
+  05C2'   2B                    	dec	hl
+  05C3'   22 0000"              	ld	(errcou),hl
+  05C6'   C9                    	ret
+  05C7'   23 4E 6F 6E           nosupm:	defb	'#Non supporting (warning): \',0
+Steller compiler CP/M-80,MSX-DOS support routine	MACRO-80 3.44	17-Feb-82	PAGE	1-15
+REV 1.01 08/30/1984
+
+  05CB'   20 73 75 70           
+  05CF'   70 6F 72 74           
+  05D3'   69 6E 67 20           
+  05D7'   28 77 61 72           
+  05DB'   6E 69 6E 67           
+  05DF'   29 3A 20 5C           
+  05E3'   00                    
+                                ;
+                                ;	**  function name, line number display objext out  **
+                                ;
+  05E4'                         ddspfn::
+  05E4'                         ddspli::			; non supporting
+  05E4'   C9                    	ret
+                                ;
+                                ;	**  get source file  **
+                                ;
+  05E5'                         getsou::
+  05E5'   21 005D"              	ld	hl,linbuf
+  05E8'   3A 000A"              	ld	a,(inclf)
+  05EB'   B7                    	or	a
+  05EC'   28 03                 	jr	z,$+5
+  05EE'   21 00DD"              	ld	hl,ilibuf
+  05F1'   06 80                 	ld	b,linbufs
+  05F3'   E5                    	push	hl
+  05F4'                         getsou1:
+  05F4'   C5                    	push	bc
+  05F5'   E5                    	push	hl
+  05F6'   3A 000A"              	ld	a,(inclf)
+  05F9'   B7                    	or	a
+  05FA'   20 05                 	jr	nz,getsou1.3
+  05FC'   CD 062F'              	call	rdsouc
+  05FF'   18 03                 	jr	getsou1.6
+  0601'                         getsou1.3:
+  0601'   CD 0692'              	call	rdincl
+  0604'                         getsou1.6:
+  0604'   E1                    	pop	hl
+  0605'   C1                    	pop	bc
+  0606'   FE 1A                 	cp	eof		;end of file ?
+  0608'   37                    	scf
+  0609'   28 0F                 	jr	z,getsou2
+  060B'   FE 0D                 	cp	cr
+  060D'   28 13                 	jr	z,getsou3
+  060F'   FE 0A                 	cp	lf
+  0611'   28 E1                 	jr	z,getsou1
+  0613'   77                    	ld	(hl),a
+  0614'   23                    	inc	hl
+  0615'   10 DD                 	djnz	getsou1
+  0617'   C3 02A9'              	jp	badsou
+  061A'                         getsou2:
+  061A'   36 00                 	ld	(hl),0
+  061C'   ED 5B 0002"           	ld	de,(slino)
+  0620'   18 0B                 	jr	getsou4
+  0622'                         getsou3:
+  0622'   36 00                 	ld	(hl),0
+  0624'   2A 0002"              	ld	hl,(slino)
+  0627'   54                    	ld	d,h
+Steller compiler CP/M-80,MSX-DOS support routine	MACRO-80 3.44	17-Feb-82	PAGE	1-16
+REV 1.01 08/30/1984
+
+  0628'   5D                    	ld 	e,l
+  0629'   23                    	inc	hl
+  062A'   22 0002"              	ld	(slino),hl
+  062D'                         getsou4:
+  062D'   E1                    	pop	hl
+  062E'   C9                    	ret
+                                ;
+                                ;	**  read source file ( 1 character )  **
+                                ;
+  062F'                         rdsouc::
+  062F'   2A 000B"              	ld	hl,(sbrptr)
+  0632'   ED 5B 000D"           	ld	de,(sbrlen)
+  0636'   E5                    	push	hl
+  0637'   B7                    	or	a
+  0638'   ED 52                 	sbc	hl,de
+  063A'   E1                    	pop	hl		; sbrptr < sbrlen ?
+  063B'   38 45                 	jr	c,rdsouc5
+  063D'   7B                    	ld	a,e
+  063E'   FE 00                 	cp	low sbfsiz
+  0640'   20 05                 	jr	nz,rdsouc0
+  0642'   7A                    	ld	a,d
+  0643'   FE 02                 	cp	high sbfsiz
+  0645'   28 04                 	jr	z,rdsouc1
+  0647'                         rdsouc0:
+  0647'   37                    	scf			; cy=1 : end of file
+  0648'   3E 1A                 	ld	a,eof		; a = eof character
+  064A'   C9                    	ret
+  064B'                         rdsouc1:
+  064B'   21 0000               	ld	hl,0
+  064E'   22 000B"              	ld	(sbrptr),hl
+  0651'   11 015D"              	ld	de,souibf
+  0654'   06 04                 	ld	b,sbfsiz/reclen
+  0656'                         rdsouc2:
+  0656'   C5                    	push	bc
+  0657'   E5                    	push	hl
+  0658'   D5                    	push	de
+  0659'   0E 1A                 	ld	c,setdmf
+  065B'   CD 0005               	call	bdos		; set dma address
+  065E'   11 005C               	ld	de,dfcb1
+  0661'   0E 14                 	ld	c,readf
+  0663'   CD 0005               	call	bdos		; read source file
+  0666'   E1                    	pop	hl
+  0667'   01 0080               	ld	bc,reclen
+  066A'   09                    	add	hl,bc
+  066B'   EB                    	ex	de,hl
+  066C'   E1                    	pop	hl
+  066D'   09                    	add	hl,bc
+  066E'   B7                    	or	a		; end of file ?
+  066F'   C1                    	pop	bc
+  0670'   20 04                 	jr	nz,rdsouc3
+  0672'   10 E2                 	djnz	rdsouc2
+  0674'   18 09                 	jr	rdsouc4
+  0676'                         rdsouc3:
+  0676'   01 FF80               	ld	bc,-reclen
+  0679'   09                    	add	hl,bc
+  067A'   22 000D"              	ld	(sbrlen),hl
+Steller compiler CP/M-80,MSX-DOS support routine	MACRO-80 3.44	17-Feb-82	PAGE	1-17
+REV 1.01 08/30/1984
+
+  067D'   18 B0                 	jr	rdsouc
+  067F'                         rdsouc4:
+  067F'   22 000D"              	ld	(sbrlen),hl
+  0682'                         rdsouc5:
+  0682'   2A 000B"              	ld	hl,(sbrptr)
+  0685'   E5                    	push	hl
+  0686'   11 015D"              	ld	de,souibf
+  0689'   19                    	add	hl,de
+  068A'   7E                    	ld	a,(hl)		; a = character
+  068B'   E1                    	pop	hl
+  068C'   23                    	inc	hl
+  068D'   22 000B"              	ld	(sbrptr),hl
+  0690'   B7                    	or	a		; cy=0 : read ok
+  0691'   C9                    	ret
+                                ;
+                                ;	**  read include file ( 1 character )  **
+                                ;
+  0692'                         rdincl::
+  0692'   2A 000F"              	ld	hl,(ibrptr)
+  0695'   ED 5B 0011"           	ld	de,(ibrlen)
+  0699'   E5                    	push	hl
+  069A'   B7                    	or	a
+  069B'   ED 52                 	sbc	hl,de
+  069D'   E1                    	pop	hl		; ibrptr < ibrlen ?
+  069E'   38 45                 	jr	c,rdincl5
+  06A0'   7B                    	ld	a,e
+  06A1'   FE 00                 	cp	low ibfsiz
+  06A3'   20 05                 	jr	nz,rdincl0
+  06A5'   7A                    	ld	a,d
+  06A6'   FE 02                 	cp	high ibfsiz
+  06A8'   28 04                 	jr	z,rdincl1
+  06AA'                         rdincl0:
+  06AA'   37                    	scf			; cy=1 : end of file
+  06AB'   3E 1A                 	ld	a,eof		; a=eof character
+  06AD'   C9                    	ret
+  06AE'                         rdincl1:
+  06AE'   21 0000               	ld	hl,0
+  06B1'   22 000F"              	ld	(ibrptr),hl
+  06B4'   11 035D"              	ld	de,incibf
+  06B7'   06 04                 	ld	b,ibfsiz/reclen
+  06B9'                         rdincl2:
+  06B9'   C5                    	push	bc
+  06BA'   E5                    	push	hl
+  06BB'   D5                    	push	de
+  06BC'   0E 1A                 	ld	c,setdmf
+  06BE'   CD 0005               	call	bdos		; set dma address
+  06C1'   11 003A"              	ld	de,ifcb
+  06C4'   0E 14                 	ld	c,readf
+  06C6'   CD 0005               	call	bdos		; read source file
+  06C9'   E1                    	pop	hl
+  06CA'   01 0080               	ld	bc,reclen
+  06CD'   09                    	add	hl,bc
+  06CE'   EB                    	ex	de,hl
+  06CF'   E1                    	pop	hl
+  06D0'   09                    	add	hl,bc
+  06D1'   B7                    	or	a		; end of file
+Steller compiler CP/M-80,MSX-DOS support routine	MACRO-80 3.44	17-Feb-82	PAGE	1-18
+REV 1.01 08/30/1984
+
+  06D2'   C1                    	pop	bc
+  06D3'   20 04                 	jr	nz,rdincl3
+  06D5'   10 E2                 	djnz 	rdincl2
+  06D7'   18 09                 	jr	rdincl4
+  06D9'                         rdincl3:
+  06D9'   01 FF80               	ld	bc,-reclen
+  06DC'   09                    	add	hl,bc
+  06DD'   22 0011"              	ld	(ibrlen),hl
+  06E0'   18 B0                 	jr	rdincl
+  06E2'                         rdincl4:
+  06E2'   22 0011"              	ld	(ibrlen),hl
+  06E5'                         rdincl5:
+  06E5'   2A 000F"              	ld	hl,(ibrptr)
+  06E8'   E5                    	push	hl
+  06E9'   11 035D"              	ld	de,incibf
+  06EC'   19                    	add	hl,de
+  06ED'   7E                    	ld	a,(hl)		;a = character
+  06EE'   E1                    	pop	hl
+  06EF'   23                    	inc	hl
+  06F0'   22 000F"              	ld	(ibrptr),hl
+  06F3'   B7                    	or	a		; cy=0 : read ok
+  06F4'   C9                    	ret
+                                ;
+                                ;	**  put object file ( 1 byte )  **
+                                ;
+  06F5'                         putobj:: ;	a : object
+  06F5'   2A 0013"              	ld	hl,(obsptr)
+  06F8'   E5                    	push	hl
+  06F9'   11 055D"              	ld	de,objobf
+  06FC'   19                    	add	hl,de
+  06FD'   77                    	ld	(hl),a
+  06FE'   E1                    	pop	hl
+  06FF'   23                    	inc	hl
+  0700'   22 0013"              	ld	(obsptr),hl
+  0703'   7D                    	ld	a,l
+  0704'   FE 00                 	cp	low obfsiz
+  0706'   C0                    	ret	nz
+  0707'   7C                    	ld	a,h
+  0708'   D6 04                 	sub 	high obfsiz	; obfptr <> obfsiz ?
+  070A'   C0                    	ret	nz
+  070B'   67                    	ld	h,a
+  070C'   6F                    	ld	l,a
+  070D'   22 0013"              	ld	(obsptr),hl
+  0710'   21 0400               	ld	hl,obfsiz
+  0713'                         wrobuf:
+  0713'   11 055D"              	ld	de,objobf
+  0716'                         wrobuf1:
+  0716'   E5                    	push	hl
+  0717'   D5                    	push	de
+  0718'   0E 1A                 	ld	c,setdmf
+  071A'   CD 0005               	call	bdos		; set dma address
+  071D'   11 0019"              	ld	de,ofcb
+  0720'   0E 15                 	ld	c,writef
+  0722'   CD 0005               	call	bdos		; write object file
+  0725'   E1                    	pop	hl
+  0726'   11 0080               	ld	de,reclen
+Steller compiler CP/M-80,MSX-DOS support routine	MACRO-80 3.44	17-Feb-82	PAGE	1-19
+REV 1.01 08/30/1984
+
+  0729'   19                    	add	hl,de
+  072A'   EB                    	ex	de,hl
+  072B'   E1                    	pop	hl
+  072C'   01 FF80               	ld	bc,-reclen
+  072F'   09                    	add	hl,bc
+  0730'   B7                    	or	a		; write ok ?
+  0731'   C2 0280'              	jp	nz,dskful
+  0734'   7C                    	ld	a,h
+  0735'   B5                    	or	l
+  0736'   20 DE                 	jr	nz,wrobuf1
+  0738'   C9                    	ret
+                                ;
+                                ;	**	symbol table register  **
+                                ;
+  0739'                         regsym:: ;	hl: register data
+  0739'   CB 66                 	bit	4,(hl)
+  073B'   28 2A                 	jr	z,regsym5
+                                ;
+                                ; local symbol
+                                ;
+  073D'   11 294D"              	ld	de,symtbl+(symmax-1)*symlen
+  0740'                         regsym1:
+  0740'   01 0C00               	ld	bc,idelen*100h
+  0743'   E5                    	push	hl
+  0744'   D5                    	push	de
+  0745'   2A 0017"              	ld	hl,(lcptr)
+  0748'   B7                    	or	a
+  0749'   ED 52                 	sbc	hl,de
+  074B'   28 44                 	jr	z,regsym10
+  074D'   D1                    	pop	de
+  074E'   E1                    	pop	hl
+  074F'   E5                    	push	hl
+  0750'   D5                    	push	de
+  0751'                         regsym2:
+  0751'   23                    	inc	hl
+  0752'   13                    	inc	de
+  0753'   1A                    	ld	a,(de)
+  0754'   BE                    	cp	(hl)
+  0755'   20 07                 	jr	nz,regsym3
+  0757'   B7                    	or	a
+  0758'   28 5E                 	jr	z,regsym13
+  075A'   10 F5                 	djnz	regsym2
+  075C'   18 5A                 	jr	regsym13
+  075E'                         regsym3:
+  075E'   D1                    	pop	de
+  075F'   21 FFF0               	ld	hl,-symlen
+  0762'   19                    	add	hl,de
+  0763'   EB                    	ex	de,hl
+  0764'   E1                    	pop	hl
+  0765'   18 D9                 	jr	regsym1
+                                ;
+                                ; globol symbol
+                                ;
+  0767'                         regsym5:
+  0767'   11 095D"              	ld	de,symtbl
+  076A'                         regsym6:
+Steller compiler CP/M-80,MSX-DOS support routine	MACRO-80 3.44	17-Feb-82	PAGE	1-20
+REV 1.01 08/30/1984
+
+  076A'   01 0C00               	ld	bc,idelen*100h
+  076D'   E5                    	push	hl
+  076E'   D5                    	push	de
+  076F'   2A 0015"              	ld	hl,(glptr)
+  0772'   B7                    	or	a
+  0773'   ED 52                 	sbc	hl,de
+  0775'   28 26                 	jr	z,regsym11
+  0777'   D1                    	pop	de
+  0778'   E1                    	pop	hl
+  0779'   E5                    	push	hl
+  077A'   D5                    	push	de
+  077B'                         regsym7:
+  077B'   23                    	inc	hl
+  077C'   13                    	inc	de
+  077D'   1A                    	ld	a,(de)
+  077E'   BE                    	cp	(hl)
+  077F'   20 07                 	jr	nz,regsym8
+  0781'   B7                    	or	a
+  0782'   28 34                 	jr	z,regsym13
+  0784'   10 F5                 	djnz	regsym7
+  0786'   18 30                 	jr	regsym13
+  0788'                         regsym8:
+  0788'   D1                    	pop	de
+  0789'   21 0010               	ld	hl,symlen
+  078C'   19                    	add	hl,de
+  078D'   EB                    	ex	de,hl
+  078E'   E1                    	pop	hl
+  078F'   18 D9                 	jr	regsym6
+                                ;
+  0791'                         regsym10:
+  0791'   2A 0017"              	ld	hl,(lcptr)
+  0794'   11 FFF0               	ld	de,-symlen
+  0797'   19                    	add	hl,de
+  0798'   22 0017"              	ld	(lcptr),hl
+  079B'   18 0A                 	jr	regsym12
+  079D'                         regsym11:
+  079D'   2A 0015"              	ld	hl,(glptr)
+  07A0'   11 0010               	ld	de,symlen
+  07A3'   19                    	add	hl,de
+  07A4'   22 0015"              	ld	(glptr),hl
+  07A7'                         regsym12:
+  07A7'   2A 0017"              	ld	hl,(lcptr)
+  07AA'   11 0020               	ld	de,symlen*2
+  07AD'   19                    	add	hl,de
+  07AE'   ED 5B 0015"           	ld	de,(glptr)
+  07B2'   B7                    	or	a
+  07B3'   ED 52                 	sbc	hl,de		;symbol table overflow ?
+  07B5'   CA 02D9'              	jp	z,sytovf
+  07B8'                         regsym13:
+  07B8'   D1                    	pop	de
+  07B9'   E1                    	pop	hl
+  07BA'   01 0010               	ld	bc,symlen
+  07BD'   ED B0                 	ldir
+  07BF'   C9                    	ret
+                                ;
+                                ;	**  symbol table search  **
+Steller compiler CP/M-80,MSX-DOS support routine	MACRO-80 3.44	17-Feb-82	PAGE	1-21
+REV 1.01 08/30/1984
+
+                                ;
+  07C0'                         seasym:: ;	hl: search data
+  07C0'   11 294D"              	ld	de,symtbl+(symmax-1)*symlen
+  07C3'                         seasym1:
+  07C3'   01 0C00               	ld	bc,idelen*100h
+  07C6'   E5                    	push	hl
+  07C7'   D5                    	push	de
+  07C8'   1A                    	ld	a,(de)
+  07C9'   B7                    	or	a
+  07CA'   28 14                 	jr	z,seasym3
+  07CC'                         seasym2:
+  07CC'   23                    	inc	hl
+  07CD'   13                    	inc	de
+  07CE'   1A                    	ld	a,(de)
+  07CF'   BE                    	cp	(hl)
+  07D0'   20 13                 	jr	nz,seasym4
+  07D2'   B7                    	or	a
+  07D3'   28 02                 	jr	z,$+4
+  07D5'   10 F5                 	djnz	seasym2
+  07D7'   E1                    	pop	hl
+  07D8'   D1                    	pop	de
+  07D9'   01 0010               	ld	bc,symlen
+  07DC'   ED B0                 	ldir
+  07DE'   AF                    	xor	a
+  07DF'   C9                    	ret
+  07E0'                         seasym3:
+  07E0'   E1                    	pop	hl
+  07E1'   2A 0015"              	ld	hl,(glptr)
+  07E4'   FE                    	defb	0feh
+  07E5'                         seasym4:
+  07E5'   E1                    	pop	hl
+  07E6'   11 FFF0               	ld	de,-symlen
+  07E9'   19                    	add	hl,de
+  07EA'   E5                    	push	hl
+  07EB'   11 095D"              	ld	de,symtbl
+  07EE'   B7                    	or	a
+  07EF'   ED 52                 	sbc	hl,de
+  07F1'   D1                    	pop	de
+  07F2'   E1                    	pop	hl
+  07F3'   30 CE                 	jr	nc,seasym1
+  07F5'   F6 FF                 	or	0ffh
+  07F7'   C9                    	ret
+                                ;
+                                ;	**  elimination local symbol  **
+                                ;
+  07F8'                         elisym::
+  07F8'   ED 5B 0017"           	ld	de,(lcptr)
+  07FC'   21 294D"              	ld	hl,symtbl+(symmax-1)*symlen
+  07FF'   22 0017"              	ld	(lcptr),hl
+  0802'   B7                    	or	a
+  0803'   ED 52                 	sbc	hl,de
+  0805'   44                    	ld	b,h
+  0806'   4D                    	ld	c,l
+  0807'   21 0010               	ld	hl,symlen
+  080A'   19                    	add	hl,de
+  080B'   16 00                 	ld	d,0
+Steller compiler CP/M-80,MSX-DOS support routine	MACRO-80 3.44	17-Feb-82	PAGE	1-22
+REV 1.01 08/30/1984
+
+  080D'   1E 01                 	ld	e,1
+  080F'                         elisym1:
+  080F'   78                    	ld	a,b
+  0810'   B1                    	or	c
+  0811'   C8                    	ret	z
+  0812'   1D                    	dec	e
+  0813'   20 25                 	jr	nz,elisym2
+  0815'   1E 10                 	ld	e,symlen
+  0817'   CB 7E                 	bit	7,(hl)		;undefined ?
+  0819'   28 1F                 	jr	z,elisym2
+  081B'   C5                    	push	bc
+  081C'   D5                    	push	de
+  081D'   E5                    	push	hl
+  081E'   23                    	inc	hl
+  081F'   E5                    	push	hl
+  0820'   11 000C               	ld	de,idelen
+  0823'   19                    	add	hl,de
+  0824'   36 00                 	ld	(hl),0
+  0826'   21 083F'              	ld	hl,udlms
+  0829'   CD 03F0'              	call	prtmsg
+  082C'   E1                    	pop	hl
+  082D'   CD 03F0'              	call	prtmsg
+  0830'   2A 0000"              	ld	hl,(errcou)
+  0833'   23                    	inc	hl
+  0834'   22 0000"              	ld	(errcou),hl
+  0837'   E1                    	pop	hl
+  0838'   D1                    	pop	de
+  0839'   C1                    	pop	bc
+  083A'                         elisym2:
+  083A'   72                    	ld	(hl),d
+  083B'   23                    	inc	hl
+  083C'   0B                    	dec	bc
+  083D'   18 D0                 	jr	elisym1
+                                ;
+  083F'   0D 0A 20 20           udlms:	defb	cr,lf,'    ?: Undefined label : ',0
+  0843'   20 20 3F 3A           
+  0847'   20 55 6E 64           
+  084B'   65 66 69 6E           
+  084F'   65 64 20 6C           
+  0853'   61 62 65 6C           
+  0857'   20 3A 20 00           
+                                ;
+                                ;	** clear symbol table  **
+                                ;
+  085B'                         clrstb::
+  085B'   21 095D"              	ld	hl,symtbl
+  085E'   22 0015"              	ld	(glptr),hl
+  0861'   01 2000               	ld	bc,symmax*symlen
+  0864'                         clrstb1:
+  0864'   36 00                 	ld	(hl),0
+  0866'   23                    	inc	hl
+  0867'   0B                    	dec	bc
+  0868'   78                    	ld	a,b
+  0869'   B1                    	or	c
+  086A'   20 F8                 	jr	nz,clrstb1
+  086C'   21 294D"              	ld	hl,symtbl+(symmax-1)*symlen
+Steller compiler CP/M-80,MSX-DOS support routine	MACRO-80 3.44	17-Feb-82	PAGE	1-23
+REV 1.01 08/30/1984
+
+  086F'   22 0017"              	ld	(lcptr),hl
+  0872'   C9                    	ret
+                                ;
+                                ;	**  put global symbol  **
+                                ;
+  0873'                         putglo::
+  0873'   11 095D"              	ld	de,symtbl
+  0876'   2A 0015"              	ld	hl,(glptr)
+  0879'   B7                    	or	a
+  087A'   ED 52                 	sbc	hl,de
+  087C'   D5                    	push	de
+  087D'   DD E1                 	pop	ix
+  087F'                         putglo1:
+  087F'   7C                    	ld	a,h
+  0880'   B5                    	or	l
+  0881'   28 5E                 	jr	z,putglo5
+  0883'   E5                    	push	hl
+  0884'   DD 6E 0D              	ld	l,(ix+idelen+1)
+  0887'   DD 66 0E              	ld	h,(ix+idelen+2)	; hl = address
+  088A'   DD 36 0D 00           	ld	(ix+idelen+1),0
+  088E'   DD CB 00 7E           	bit	7,(ix)		;undefined ?
+  0892'   28 19                 	jr	z,putglo2
+  0894'   DD E5                 	push	ix
+  0896'   21 08E7'              	ld	hl,udfms
+  0899'   CD 03F0'              	call	prtmsg		;print error message
+  089C'   E1                    	pop	hl
+  089D'   E5                    	push	hl
+  089E'   23                    	inc	hl
+  089F'   CD 03F0'              	call	prtmsg
+  08A2'   2A 0000"              	ld	hl,(errcou)
+  08A5'   23                    	inc	hl
+  08A6'   22 0000"              	ld	(errcou),hl
+  08A9'   DD E1                 	pop	ix
+  08AB'   18 29                 	jr	putglo4
+  08AD'                         putglo2:
+  08AD'   06 58                 	ld	b,58h
+  08AF'   DD 7E 00              	ld	a,(ix)
+  08B2'   E6 0F                 	and	0fh
+  08B4'   3D                    	dec	a		;constant ?
+  08B5'   28 08                 	jr	z,putglo3
+  08B7'   04                    	inc	b
+  08B8'   3D                    	dec	a		;variable ?
+  08B9'   28 04                 	jr	z,putglo3
+  08BB'   04                    	inc	b
+  08BC'   3D                    	dec	a
+  08BD'   20 17                 	jr	nz,putglo4
+  08BF'                         putglo3:
+  08BF'   C5                    	push	bc
+  08C0'   DD E5                 	push	ix
+  08C2'   CD 0000*              	call	ptloc		;put location address
+  08C5'   E1                    	pop	hl
+  08C6'   F1                    	pop	af
+  08C7'   E5                    	push	hl
+  08C8'   23                    	inc	hl
+  08C9'   11 0000*              	ld	de,strbuf
+  08CC'   01 000D               	ld	bc,idelen+1
+Steller compiler CP/M-80,MSX-DOS support routine	MACRO-80 3.44	17-Feb-82	PAGE	1-24
+REV 1.01 08/30/1984
+
+  08CF'   ED B0                 	ldir			;move
+  08D1'   CD 0000*              	call	ptname		;put name
+  08D4'   DD E1                 	pop	ix
+  08D6'                         putglo4:
+  08D6'   11 0010               	ld	de,symlen
+  08D9'   DD 19                 	add	ix,de
+  08DB'   E1                    	pop	hl
+  08DC'   B7                    	or	a
+  08DD'   ED 52                 	sbc	hl,de
+  08DF'   18 9E                 	jr	putglo1
+                                ;
+  08E1'                         putglo5:
+  08E1'   2A 0000*              	ld	hl,(cloc)
+  08E4'   C3 0000*              	jp	ptloc		;put new code loc
+  08E7'   0D 0A 20 20           udfms:	defb	cr,lf,'    ?: Undefined function name : ',0
+  08EB'   20 20 3F 3A           
+  08EF'   20 55 6E 64           
+  08F3'   65 66 69 6E           
+  08F7'   65 64 20 66           
+  08FB'   75 6E 63 74           
+  08FF'   69 6F 6E 20           
+  0903'   6E 61 6D 65           
+  0907'   20 3A 20 00           
+                                ;---------------------------------------------------
+                                ;-  		w o r k   a r e a    		   -
+                                ;---------------------------------------------------
+  090B'                         		dseg
+  0000"                         work.b::
+                                
+  0000"                         errcou::defs	2		;error counter
+                                
+  0002"                         slino:	defs	2		;source line number
+                                
+  0004"                         lino1:	defs	2		;save area
+  0006"                         cptr1:	defs	2
+  0008"                         slino1:	defs	2
+                                
+  000A"                         inclf::	defs	1		; 0=source, 0ffh=include
+                                
+  000B"                         sbrptr::defs	2		;source input buffer read pointer
+  000D"                         sbrlen::defs	2		;source input buffer read length
+  000F"                         ibrptr::defs	2		;include input buffer read pointer
+  0011"                         ibrlen::defs	2		;include input buffer read length
+                                
+  0013"                         obsptr::defs	2		;object output buffer store pointer
+                                
+  0015"                         glptr::	defs	2		;global symbol store pointer
+  0017"                         lcptr::	defs	2		;local symbol store pointer
+  0019"                         ofcb::	defs	33		;object fcb
+  003A"                         ifcb::	defs	33		;include fcb
+                                
+  005B"                         sbmsad::defs	2		;sub error message address
+                                
+  0080                          linbufs	equ	128
+  005D"                         linbuf::defs	linbufs		;line buffer
+  00DD"                         ilibuf::defs	linbufs
+Steller compiler CP/M-80,MSX-DOS support routine	MACRO-80 3.44	17-Feb-82	PAGE	1-25
+REV 1.01 08/30/1984
+
+                                
+  0200                          sbfsiz	equ	reclen*4
+  015D"                         souibf::defs	sbfsiz		;source input buffer
+  0200                          ibfsiz	equ	reclen*4
+  035D"                         incibf::defs	ibfsiz		
+  0400                          obfsiz	equ	reclen*8
+  055D"                         objobf::defs	obfsiz		;objext output buffer
+  095D"                         symtbl::defs	symmax*symlen	;symbol table
+                                
+                                	end	start
+Steller compiler CP/M-80,MSX-DOS support routine	MACRO-80 3.44	17-Feb-82	PAGE	S
+REV 1.01 08/30/1984
+
+Macros:
+
+Symbols:
+036FI'	ABORT           037A'	ABTMS           02C2'	BADFIL          
+0553'	BADIFL          055C'	BADIFLM         02A9'	BADSOU          
+0005 	BDOS            0000 	BOOT            0122'	CEND            
+013B'	CEND1           0140'	CEND2           0460'	CHCKFC          
+08E2*	CLOC            0010 	CLOSEF          085BI'	CLRSTB          
+0864'	CLRSTB1         00F2*	CODORG          00BC*	COMPIL          
+053A*	CPTR            0006"	CPTR1           000D 	CR              
+01B1'	CRLF            00FF*	DATORG          05E4I'	DDSPFN          
+05E4I'	DDSPLI          0100 	DEFCDA          4000 	DEFDTA          
+0006I 	DEFSTA          0013 	DELETF          005C 	DFCB1           
+006C 	DFCB2           0264'	DIRFUL          00FC*	DLOC            
+00FFI 	DSAIND          0280'	DSKFUL          053E'	EDICM           
+051BI'	EDINCL          01E5'	EDMSG           07F8I'	ELISYM          
+080F'	ELISYM1         083A'	ELISYM2         001A 	EOF             
+0000I"	ERRCOU          0201'	ERRCUM          0383I'	ERROR           
+0391'	ERROR1          03AE'	ERROR1.5        03B1'	ERROR2          
+03C1'	ERROR3          03CD'	ERROR4          03D5'	ERROR5          
+02F8'	ERRPRT          014BI'	FNCHK           014D'	FNCHK1          
+05E5I'	GETSOU          05F4'	GETSOU1         0601'	GETSOU1.3       
+0604'	GETSOU1.6       061A'	GETSOU2         0622'	GETSOU3         
+062D'	GETSOU4         0015I"	GLPTR           04AC*	GTOKEN          
+0200 	IBFSIZ          0011I"	IBRLEN          000FI"	IBRPTR          
+000C 	IDELEN          003AI"	IFCB            00DDI"	ILIBUF          
+035DI"	INCIBF          000AI"	INCLF           050A'	INCLFLM         
+0490I'	INCLU           0017I"	LCPTR           000A 	LF              
+005DI"	LINBUF          0080 	LINBUFS         052E*	LINO            
+0004"	LINO1           0016 	MAKEF           03FEI'	MKFCB           
+0413'	MKFCB1          044C'	MKFCB10         0451'	MKFCB11         
+0454'	MKFCB12         0417'	MKFCB2          0419'	MKFCB3          
+041C'	MKFCB4          0426'	MKFCB5          042E'	MKFCB6          
+0433'	MKFCB7          043A'	MKFCB8          0444'	MKFCB9          
+005C'	MVOFCB          0293'	NOCLS           01FE'	NOERR           
+0573'	NOIFL           057C'	NOIFLM          048D'	NOMAK           
+024C'	NOSOU           05B3'	NOSUP           05C7'	NOSUPM          
+0400 	OBFSIZ          00C7'	OBJCLS1         00D2'	OBJCLS2         
+055DI"	OBJOBF          0013I"	OBSPTR          0019I"	OFCB            
+000F 	OPENF           05B4*	OPTISW          058DI'	PBREAK          
+0328I'	PRDEC5          034A'	PRDECS          034C'	PRDECS1         
+0363'	PRDECS2         0365'	PRDECS3         0318I'	PRHEX1          
+030FI'	PRHEX2          0308I'	PRHEX4          04F9'	PRIFNL          
+0009 	PRINTF          020D'	PRSZAD          0249'	PRSZAD1         
+03F0I'	PRTMSG          08E5*	PTLOC           08D2*	PTNAME          
+0002 	PUTCHRF         0873I'	PUTGLO          087F'	PUTGLO1         
+08AD'	PUTGLO2         08BF'	PUTGLO3         08D6'	PUTGLO4         
+08E1'	PUTGLO5         06F5I'	PUTOBJ          0692I'	RDINCL          
+06AA'	RDINCL0         06AE'	RDINCL1         06B9'	RDINCL2         
+06D9'	RDINCL3         06E2'	RDINCL4         06E5'	RDINCL5         
+062FI'	RDSOUC          0647'	RDSOUC0         064B'	RDSOUC1         
+0656'	RDSOUC2         0676'	RDSOUC3         067F'	RDSOUC4         
+0682'	RDSOUC5         0014 	READF           0080 	RECLEN          
+0739I'	REGSYM          0740'	REGSYM1         0791'	REGSYM10        
+079D'	REGSYM11        07A7'	REGSYM12        07B8'	REGSYM13        
+Steller compiler CP/M-80,MSX-DOS support routine	MACRO-80 3.44	17-Feb-82	PAGE	S-1
+REV 1.01 08/30/1984
+
+0751'	REGSYM2         075E'	REGSYM3         0767'	REGSYM5         
+076A'	REGSYM6         077B'	REGSYM7         0788'	REGSYM8         
+0000I 	RETADR          0101 	REV             0200 	SBFSIZ          
+005BI"	SBMSAD          000DI"	SBRLEN          000BI"	SBRPTR          
+07C0I'	SEASYM          07C3'	SEASYM1         07CC'	SEASYM2         
+07E0'	SEASYM3         07E5'	SEASYM4         001A 	SETDMF          
+0002"	SLINO           0008"	SLINO1          015DI"	SOUIBF          
+049B*	SPSKIP          0157'	STAMSG          0000I'	START           
+0043'	STDFDR          004C'	STDFTP2         0033'	STDFTPL         
+0114*	STKBOT          0002I 	STPTYP          08CA*	STRBUF          
+01C0'	STRDAT          01B4'	STRPRO          01CC'	STRSTA1         
+01E3'	STRSTA2         0010 	SYMLEN          0200 	SYMMAX          
+095DI"	SYMTBL          04B1*	SYNERR          02D9'	SYTOVF          
+0462*	TRAUPC          05A6I'	TROFF           059AI'	TRON            
+08E7'	UDFMS           083F'	UDLMS           0000I"	WORK.B          
+0000*	WORK.E          0015 	WRITEF          0713'	WROBUF          
+0716'	WROBUF1         
+
+
+
+No Fatal error(s)
+
+
+002I 	STPTYP          08CA*	STRBUF          
+01C0'	STRDAT          01B4'	STRPRO          01CC'	STRSTA1         
+01E3'	STR

@@ -1,0 +1,1302 @@
+	title 	Steller compiler CP/M-80,MSX-DOS support routine
+	subttl 	REV 1.01 08/30/1984
+	name ('cpmmod')
+.Z80
+;**************************************************
+;*						  *
+;*         Stellar compiler    in/out moudle      *
+;*						  *
+;*     CP/M-80 , MSX-DOS support routine          *
+;*	   ( REV 1.01 )				  *
+;*						  *
+;*	Copyright (c) 1984 H.Ohnuki / MIA	  *
+;*						  *
+;**************************************************
+
+rev	equ	101h	;revision 1.01
+
+;--------------------------------------------------
+;-		external symbol			  -
+;--------------------------------------------------
+
+	external	optisw,lino,strbuf,cptr
+	external	codorg,datorg,stkbot,cloc,dloc
+	external	work.e
+	
+	external	compil,ptloc,ptname,synerr,gtoken
+	external	spskip,traupc
+;--------------------------------------------------
+;-		constant define			  -
+;--------------------------------------------------
+
+defcda	equ	0100h	;default code segment origin ( 0100h )
+defdta	equ	4000h	;default data segment origin ( 4000h )
+
+defsta	equ	0006h	;default stack bottom address
+dsaind	equ	0ffh	;sp set address ( 00h=direct, 0ffh=indirect )
+
+stptyp	equ	2	;return type 2 : jump
+retadr	equ	0000h	;return address: 0000h
+
+symmax	equ	512	;max 512 symbol
+symlen	equ	16	;1 symbol length = 16 byte
+idelen	equ	12	;identifier length = 12 byte
+
+cr	equ	0dh	;carrage return
+lf	equ	0ah	;line feed
+eof	equ	1ah	;end of file
+;
+;	CP/M-80,MSX-DOS interface
+;
+reclen	equ	128	;1 record = 128 byte
+
+boot	equ	0000h	;system reboot entry
+bdos	equ	0005h	;bdos entry
+dfcb1	equ	005ch	;default fcb_1
+dfcb2	equ	006ch	;default fcb_2
+
+putchrf	equ	2	;put console character
+printf	equ	9	;print string function
+openf	equ	15	;open file function
+closef	equ	16	;close file function
+deletf	equ	19	;delete file function
+readf	equ	20	;read next record
+writef	equ	21	;write next record
+makef	equ	22	;make file
+setdmf	equ	26	;set dma function
+
+;--------------------------------------------------
+;-		global symbol			  -
+;--------------------------------------------------
+
+	global		defsta,dsaind,stptyp,retadr
+	
+
+;--------------------------------------------------
+;-		p r o g r a m			  -
+;--------------------------------------------------
+
+		cseg
+;
+;	** compile **
+;	
+start::
+	ld	hl,(bdos+1)
+	ld	l,0
+	ld	sp,hl		;set sp reg
+	ld	de,stamsg
+	ld	c,printf
+	call	bdos		;print starting message
+;
+	ld	hl,work.b	;work zero clear
+	ld	(hl),0
+	ld	de,work.b+1
+	ld	bc,work.e-work.b-1
+	ldir
+;
+	ld	a,(dfcb1+1)
+	cp	' '		;source file name ok?
+	jp	z,nosou
+	ld	hl,dfcb1+9
+	ld	a,(hl)
+	cp	' '
+	jr	nz,stdftpl
+	ld	(hl),'S'
+	inc	hl
+	ld	(hl),'O'
+	inc	hl
+	ld	(hl),'U'
+stdftpl:
+	ld	bc,9
+	ld	hl,dfcb1
+	ld	de,dfcb2
+	ld	a,(de)
+	or	a
+	jr	z,stdfdr
+	inc	de
+	inc	hl
+	dec	bc
+stdfdr:
+	ld	a,(dfcb2+1)
+	cp	' '
+	jr	nz,stdftp2
+	ldir			;move dfcb1 to dfcb2
+stdftp2:
+	ld	hl,dfcb2+9
+	ld	a,(hl)
+	cp	' '
+	jr	nz,mvofcb
+	ld	(hl),'O'
+	inc	hl
+	ld	(hl),'B'
+	inc	hl
+	ld	(hl),'J'	;set file type '.OBJ'
+mvofcb:
+	ld	hl,dfcb2
+	ld	de,ofcb
+	ld	bc,16
+	ldir			;move dfcb2 to ofcb
+;
+	ld	hl,dfcb1+1
+	call	fnchk		;file name check
+	xor	a
+	ld	(dfcb1+32),a	;reset dfcb1.cr
+	ld	de,dfcb1
+	ld	c,openf
+	call	bdos		;open source file
+	inc	a		;ok?
+	jp	z,nosou
+	ld	hl,sbfsiz
+	ld	(sbrptr),hl
+	ld	(sbrlen),hl
+;
+	ld	hl,ofcb+1
+	call	fnchk		;file name check
+	ld	de,ofcb
+	push	de
+	ld	c,deletf
+	call	bdos		;delete old object file
+	pop	de
+	ld	c,makef
+	call	bdos		;make new object file
+	inc	a
+	jp	z,dirful
+	xor	a
+	ld	(ofcb+32),a	;reset ofcb.cr
+	ld	h,a
+	ld	l,a
+	ld	(obsptr),hl
+	ld	(errcou),hl	;clrar error counter
+;
+	inc	hl
+	ld	(slino),hl
+	ld	hl,defcda
+	ld	(codorg),hl	;set default code segment origin
+	ld	hl,defdta
+	ld	(datorg),hl	;set default data segment origin
+	call	compil		;compile
+;
+	ld	hl,(obsptr)
+	ld	d,h
+	ld	e,l
+	ld	bc,objobf
+	add	hl,bc
+objcls1:
+	ld	a,e
+	and	reclen-1
+	jr	z,objcls2
+	ld	(hl),0ffh	;0ffh = end mark
+	inc	de
+	inc	hl
+	jr	objcls1
+objcls2:
+	ex	de,hl
+	call	wrobuf		;write object buffer
+	ld	de,ofcb 
+	ld	c,closef
+	call	bdos		;close object file
+	inc	a
+	jp	z,nocls
+	
+	ld	de,crlf
+	ld	c,printf
+	call	bdos
+	ld	de,strpro
+	ld	bc,(cloc)
+	ld	hl,(codorg)
+	call	prszad		;print code size,address
+	ld	de,strdat
+	ld	bc,(dloc)
+	ld	hl,(datorg)
+	call	prszad		;print date size,address
+	ld	a,(optisw)
+	bit	5,a		;%s off?
+	jr	z,cend
+	ld	de,strsta1
+	ld	c,printf
+	call	bdos
+	ld	hl,(stkbot)
+	dec	hl
+	call	prhex4		;print stack bottom address
+	ld	de,strsta2
+	ld	c,printf
+	call	bdos
+cend:
+	ld	de,edmsg
+	ld	c,printf
+	call	bdos
+	ld	hl,(errcou)
+	ld	a,h
+	or	l		;no error?
+	jr	nz,cend1
+	ld	de,noerr
+	ld	c,printf
+	call	bdos		;print "No error(s)"
+	jr	cend2
+cend1:
+	ld	a,3
+	call	prdec5		;print error count
+cend2:
+	ld	de,errcum
+	ld	c,printf
+	call	bdos
+	jp	boot		;return to os
+;
+;	** file name check **
+;
+fnchk::	;	hl: bcb.fl address
+	ld	b,8+3
+fnchk1:
+	ld	a,(hl)
+	cp	'?'
+	jp	z,badfil
+	inc	hl
+	djnz	fnchk1
+	ret
+;
+;	message
+;
+stamsg:	defb	cr,lf,'Stellar compiler Rev '
+	defb	rev/100h+'0','.',(rev/10h and 0fh)+'0',(rev and 0fh)+'0'
+	defb	' ( CP/M-80,MSX-DOS Version )'
+	defb	cr,lf,'Copyright (c) 1984 H.Ohnuki / MIA'
+crlf:	defb	cr,lf,'$'
+strpro:	defb	cr,lf,'Program  $'
+strdat:	defb	cr,lf,'Data     $'
+strsta1:defb	cr,lf,'Stack bottom  (    -$'
+strsta2:defb	')$'
+edmsg:	defb	cr,lf,lf,'**  End of compile.  $'
+noerr:	defb	'No$'
+errcum:	defb	' error(s)',cr,lf,'$'
+;
+;	print size,address
+;
+prszad:
+	push	bc
+	push	hl
+	ld	c,printf
+	call	bdos		;print string
+	pop	de
+	pop	hl
+	push	hl
+	push	de
+	or	a
+	sbc	hl,de		; hl = size ( byte )
+	ld	a,h
+	or	l
+	push	af
+	call	prhex4
+	pop	af
+	jr	z,prszad1
+	ld	e,' '
+	ld	c,putchrf
+	call	bdos
+	ld	e,'('
+	ld	c,putchrf
+	call	bdos
+	pop	hl
+	call	prhex4
+	ld	e,'-'
+	ld	c,putchrf
+	call	bdos
+	pop	hl
+	dec	hl
+	call	prhex4
+	ld	e,')'
+	ld	c,putchrf
+	jp	bdos
+prszad1:
+	pop	af
+	pop	af		; sp := sp + 4
+	ret
+;
+;	I/O error
+;
+nosou:
+	ld	de,$+6
+	jp	errprt
+	defb	cr,lf,'%No source file$'
+dirful:
+	ld	de,$+6
+	jp	errprt
+	defb	cr,lf,'%No directory space$'
+dskful:
+	ld	de,$+6
+	jp	errprt
+	defb	cr,lf,'%Disk full$'
+nocls:
+	ld	de,$+6
+	jp	errprt
+	defb	cr,lf,'%Cannot close$'
+badsou:
+	ld	de,$+6
+	jp	errprt
+	defb	cr,lf,'%Bad source file$'
+badfil:
+	ld	de,$+6
+	jp	errprt
+	defb	cr,lf,'%Bad file name$'
+sytovf:
+	ld	de,$+6
+	jp	errprt
+	defb	cr,lf,'%Symbol table overflow$'
+;
+errprt:
+	ld	c,printf
+	call	bdos
+	ld	de,crlf
+	ld	c,printf
+	call	bdos
+	jp	boot		;roturn to os
+;
+;	**  print hex  **
+;
+prhex4::	;hl: output data
+	push	hl
+	ld	a,h
+	call	prhex2
+	pop	hl
+	ld	a,l
+;
+prhex2::
+	push	af
+	rrca
+	rrca
+	rrca
+	rrca
+	call	prhex1
+	pop	af
+;
+prhex1::
+	and	0fh
+	add	a,'0'
+	cp	'9'+1
+	jr	c,$+4
+	add	a,'A'-'9'-1
+	ld	e,a
+	ld	c,putchrf
+	jp	bdos
+;
+;	**  print decimal  **
+;
+prdec5:: ;	a : 00h=no zero suppression
+	 ;	    02h=zero suppression. fixed print  ( 5 digit )
+	 ;	    03=zero suppression, varying print ( 1...5 digit )
+	 ;	hl: output data
+	ld	d,a
+	ld	bc,10000
+	call	prdecs
+	ld	bc,1000
+	call	prdecs
+	ld	bc,100
+	call	prdecs
+	ld	bc,10
+	call	prdecs
+	ld	a,l
+	or	'0'
+	ld	e,a
+	ld	c,putchrf
+	jp	bdos
+;
+prdecs:
+	ld	e,'0'
+prdecs1:
+	or	a
+	sbc	hl,bc
+	inc	e
+	jr	nc,prdecs1
+	add	hl,bc
+	dec	e
+	bit	1,d
+	jr	z,prdecs3
+	ld	a,e
+	cp	'0'
+	jr	nz,prdecs2
+	bit	0,d
+	ret	nz
+	ld	e,' '
+	defb	01h
+prdecs2:
+	res	1,d
+prdecs3:
+	push	hl
+	push	de
+	ld	c,putchrf
+	call	bdos
+	pop	de
+	pop	hl
+	ret
+;
+;	**  abort  **
+;
+abort::	ld	de,abtms
+	ld	c,printf
+	call	bdos
+	jp	cend
+;
+abtms:	defb	cr,lf,'%Abort$'
+;
+;	**  error  **
+;	
+error::	;	hl: error message address (nul end string)
+	;	de: sub message address   (nul end string)
+	ld	(sbmsad),de
+	dec	hl
+	push	hl
+	ld	de,crlf
+	ld	c,printf
+	call	bdos
+error1:
+	pop	hl
+	inc	hl
+	ld	a,(hl)
+	or	a
+	jr	z,error5
+	push	hl
+	cp	'#'
+	jr	nz,error2
+	ld	hl,(lino)
+	ld	a,2
+	call	prdec5		;print line number
+	ld	de,error1.5
+	ld	c,printf
+	call	bdos
+	jr	error1
+error1.5:	defb	': $'
+error2:	
+	cp	'@'
+	jr	nz,error3
+	pop	hl
+	inc	hl
+	ld	e,(hl)
+	inc	hl
+	ld	d,(hl)
+	push	hl
+	ex	de,hl
+	call	prtmsg		;print sub message
+	jr	error1
+error3:
+	cp	'\'
+	jr	nz,error4
+	ld	hl,(sbmsad)
+	call	prtmsg		;print sub message
+	jr	error1
+error4:
+	ld	e,a
+	ld	c,putchrf
+	call	bdos
+	jr	error1
+;
+error5:
+	ld	hl,(errcou)
+	inc	hl
+	ld	(errcou),hl
+	ld	de,crlf
+	ld	c,printf
+	call	bdos
+	ld	hl,linbuf
+	ld	a,(inclf)
+	or	a
+	jr	z,$+5
+	ld	hl,ilibuf
+;
+;	**  print message  **
+;
+prtmsg:: ;	hl: string address (nul code end)
+	ld	a,(hl)
+	or	a
+	ret	z
+	push	hl
+	ld	e,a
+	ld	c,putchrf
+	call	bdos
+	pop	hl
+	inc	hl
+	jr	prtmsg
+;
+;	**  make fcb  **
+;
+mkfcb::	;	de: fcb address
+	;	hl: file name
+	call	spskip		;space ship
+	ex	de,hl
+	ld	a,(de)
+	or	a
+	jr	z,mkfcb1
+	call	traupc		;translate to upper case
+	sub	'@'
+	ld	c,a
+	inc	de
+	ld	a,(de)
+	cp	':'
+	jr	z,mkfcb2
+	dec	de
+mkfcb1:
+	ld	(hl),0
+	jr	mkfcb3
+mkfcb2:
+	ld	(hl),c		;set fcb.dr
+	inc	de
+mkfcb3:
+	ld	b,8		;set fcb.f1 ... fcb.f8
+	inc	hl
+mkfcb4:
+	call	chckfc		;character check
+	jr	z,mkfcb6
+	ld	(hl),a
+	inc	de
+	inc	hl
+	djnz	mkfcb4
+mkfcb5:
+	call	chckfc
+	jr	z,mkfcb7
+	inc	de
+	jr	mkfcb5
+mkfcb6:
+	ld	(hl),' '
+	inc	hl
+	djnz	mkfcb6
+mkfcb7:
+	ld	b,3		;set fcb.t1 ... fcb.t3
+	cp	'.'
+	jr	nz,mkfcb10
+	inc	de
+mkfcb8:
+	call	chckfc		;character check
+	jr	z,mkfcb10
+	ld	(hl),a
+	inc	de
+	inc	hl
+	djnz 	mkfcb8
+mkfcb9:
+	call	chckfc
+	jr	z,mkfcb11
+	inc	de
+	jr	mkfcb9
+mkfcb10:
+	ld	(hl),' '
+	inc	hl
+	djnz	mkfcb10
+mkfcb11:
+	ld	b,3
+	xor	a		; clear fcb.ex .si .s2
+mkfcb12:
+	ld	(hl),a
+	inc	hl
+	djnz	mkfcb12
+	ld	bc,17
+	add	hl,bc
+	ld	(hl),a		;clrar fcb.rc
+	ex	de,hl
+	or	a		; cy=0 :make ok!
+	ret
+;
+chckfc:
+	ld	a,(de)
+	call	traupc		;translate to upper case
+	or	a
+	ret	z
+	cp	' '
+	ret	z
+	jr	c,nomak
+	cp	'.'
+	ret	z
+	cp	','
+	ret	z
+	cp	':'
+	ret	z
+	cp	';'
+	ret	z
+	cp	'<'
+	ret	z
+	cp	'='
+	ret	z
+	cp	'>'
+	ret	z
+	cp	'['
+	ret	z
+	cp	']'
+	ret	z		; z=1 : delimiting character
+	cp	'?'
+	jr	z,nomak
+	cp	'*'
+	ret	nz		; z=0 : non delimiting character
+nomak:	
+	pop	af
+	scf			; cy=1 : bad file name
+	ret
+;
+;	**  include file open  **
+;
+inclu::
+	ld	a,(inclf)
+	or	a
+	jp	nz,synerr
+	ld	hl,(cptr)
+	call	spskip
+	push	hl
+	ld	de,ifcb
+	call	mkfcb		;make fcb
+	jp	c,badifl
+	ld	(cptr),hl
+	push	hl
+	call	gtoken
+	cp	';'
+	jp	nz,synerr
+	ld	de,ifcb
+	ld	c,openf
+	call	bdos		; file open
+	inc	a
+	jp	z,noifl
+	ld	hl,ibfsiz
+	ld	(ibrptr),hl
+	ld	(ibrlen),hl
+;
+	ld	a,0ffh
+	ld	(inclf),a
+	ld	hl,(cptr)
+	ld	(cptr1),hl
+	ld	hl,(lino)
+	ld	(lino1),hl
+	ld	hl,(slino)
+	ld	(slino1),hl
+	ld	hl,1
+	ld	(slino),hl
+	ld	hl,ilibuf
+	ld	(cptr),hl
+	ld	(hl),0
+;
+	ld	hl,inclflm		;print include file name
+	call	prtmsg
+	pop	hl
+	pop	de
+	or	a
+	sbc	hl,de
+	ex	de,hl
+prifnl:
+	ld	a,d
+	or	e
+	ret	z
+	push	de
+	push	hl
+	ld	e,(hl)
+	ld	c,putchrf
+	call	bdos
+	pop	hl
+	pop	de
+	inc	hl
+	dec	de
+	jr	prifnl
+;
+inclflm:defb	cr,lf,'**  Include : ',0
+;
+;	**  end of include  **
+;
+edincl::
+	ld	a,(inclf)
+	or	a
+	ret	z		;cy=0 : end of source
+	xor	a
+	ld	(inclf),a
+	ld	hl,edicm
+	call	prtmsg
+	ld	hl,(lino1)
+	ld	(lino),hl
+	ld	hl,(slino1)
+	ld	(slino),hl
+	ld	hl,(cptr1)
+	ld	(cptr),hl
+	scf			; cy=1 : end of include
+	ret
+;
+edicm:	defb	cr,lf,'**  End of include',0
+;
+;	**  include error  **
+;
+badifl:
+	ld	hl,badiflm
+	call	error
+	jp	abort
+badiflm:defb	'#Bad include file name',0
+;
+noifl:
+	ld	hl,noiflm
+	call	error
+	jp	abort
+noiflm:	defb	'#No include file',0
+;
+;	**  break, tron, troff  **
+;	
+pbreak::
+	ld	de,$+6
+	jp	nosup
+	defb	'%break',0
+tron::
+	ld	de,$+6
+	jp	nosup
+	defb	'%tron',0
+troff::
+	ld	de,$+6
+	jp	nosup
+	defb	'%troff',0
+nosup:
+	ld	a,(optisw)
+	bit	4,a		;%debug sw on ?
+	ret	z
+	ld	hl,nosupm
+	call	error
+	ld	hl,(errcou)
+	dec	hl
+	ld	(errcou),hl
+	ret
+nosupm:	defb	'#Non supporting (warning): \',0
+;
+;	**  function name, line number display objext out  **
+;
+ddspfn::
+ddspli::			; non supporting
+	ret
+;
+;	**  get source file  **
+;
+getsou::
+	ld	hl,linbuf
+	ld	a,(inclf)
+	or	a
+	jr	z,$+5
+	ld	hl,ilibuf
+	ld	b,linbufs
+	push	hl
+getsou1:
+	push	bc
+	push	hl
+	ld	a,(inclf)
+	or	a
+	jr	nz,getsou1.3
+	call	rdsouc
+	jr	getsou1.6
+getsou1.3:
+	call	rdincl
+getsou1.6:
+	pop	hl
+	pop	bc
+	cp	eof		;end of file ?
+	scf
+	jr	z,getsou2
+	cp	cr
+	jr	z,getsou3
+	cp	lf
+	jr	z,getsou1
+	ld	(hl),a
+	inc	hl
+	djnz	getsou1
+	jp	badsou
+getsou2:
+	ld	(hl),0
+	ld	de,(slino)
+	jr	getsou4
+getsou3:
+	ld	(hl),0
+	ld	hl,(slino)
+	ld	d,h
+	ld 	e,l
+	inc	hl
+	ld	(slino),hl
+getsou4:
+	pop	hl
+	ret
+;
+;	**  read source file ( 1 character )  **
+;
+rdsouc::
+	ld	hl,(sbrptr)
+	ld	de,(sbrlen)
+	push	hl
+	or	a
+	sbc	hl,de
+	pop	hl		; sbrptr < sbrlen ?
+	jr	c,rdsouc5
+	ld	a,e
+	cp	low sbfsiz
+	jr	nz,rdsouc0
+	ld	a,d
+	cp	high sbfsiz
+	jr	z,rdsouc1
+rdsouc0:
+	scf			; cy=1 : end of file
+	ld	a,eof		; a = eof character
+	ret
+rdsouc1:
+	ld	hl,0
+	ld	(sbrptr),hl
+	ld	de,souibf
+	ld	b,sbfsiz/reclen
+rdsouc2:
+	push	bc
+	push	hl
+	push	de
+	ld	c,setdmf
+	call	bdos		; set dma address
+	ld	de,dfcb1
+	ld	c,readf
+	call	bdos		; read source file
+	pop	hl
+	ld	bc,reclen
+	add	hl,bc
+	ex	de,hl
+	pop	hl
+	add	hl,bc
+	or	a		; end of file ?
+	pop	bc
+	jr	nz,rdsouc3
+	djnz	rdsouc2
+	jr	rdsouc4
+rdsouc3:
+	ld	bc,-reclen
+	add	hl,bc
+	ld	(sbrlen),hl
+	jr	rdsouc
+rdsouc4:
+	ld	(sbrlen),hl
+rdsouc5:
+	ld	hl,(sbrptr)
+	push	hl
+	ld	de,souibf
+	add	hl,de
+	ld	a,(hl)		; a = character
+	pop	hl
+	inc	hl
+	ld	(sbrptr),hl
+	or	a		; cy=0 : read ok
+	ret
+;
+;	**  read include file ( 1 character )  **
+;
+rdincl::
+	ld	hl,(ibrptr)
+	ld	de,(ibrlen)
+	push	hl
+	or	a
+	sbc	hl,de
+	pop	hl		; ibrptr < ibrlen ?
+	jr	c,rdincl5
+	ld	a,e
+	cp	low ibfsiz
+	jr	nz,rdincl0
+	ld	a,d
+	cp	high ibfsiz
+	jr	z,rdincl1
+rdincl0:
+	scf			; cy=1 : end of file
+	ld	a,eof		; a=eof character
+	ret
+rdincl1:
+	ld	hl,0
+	ld	(ibrptr),hl
+	ld	de,incibf
+	ld	b,ibfsiz/reclen
+rdincl2:
+	push	bc
+	push	hl
+	push	de
+	ld	c,setdmf
+	call	bdos		; set dma address
+	ld	de,ifcb
+	ld	c,readf
+	call	bdos		; read source file
+	pop	hl
+	ld	bc,reclen
+	add	hl,bc
+	ex	de,hl
+	pop	hl
+	add	hl,bc
+	or	a		; end of file
+	pop	bc
+	jr	nz,rdincl3
+	djnz 	rdincl2
+	jr	rdincl4
+rdincl3:
+	ld	bc,-reclen
+	add	hl,bc
+	ld	(ibrlen),hl
+	jr	rdincl
+rdincl4:
+	ld	(ibrlen),hl
+rdincl5:
+	ld	hl,(ibrptr)
+	push	hl
+	ld	de,incibf
+	add	hl,de
+	ld	a,(hl)		;a = character
+	pop	hl
+	inc	hl
+	ld	(ibrptr),hl
+	or	a		; cy=0 : read ok
+	ret
+;
+;	**  put object file ( 1 byte )  **
+;
+putobj:: ;	a : object
+	ld	hl,(obsptr)
+	push	hl
+	ld	de,objobf
+	add	hl,de
+	ld	(hl),a
+	pop	hl
+	inc	hl
+	ld	(obsptr),hl
+	ld	a,l
+	cp	low obfsiz
+	ret	nz
+	ld	a,h
+	sub 	high obfsiz	; obfptr <> obfsiz ?
+	ret	nz
+	ld	h,a
+	ld	l,a
+	ld	(obsptr),hl
+	ld	hl,obfsiz
+wrobuf:
+	ld	de,objobf
+wrobuf1:
+	push	hl
+	push	de
+	ld	c,setdmf
+	call	bdos		; set dma address
+	ld	de,ofcb
+	ld	c,writef
+	call	bdos		; write object file
+	pop	hl
+	ld	de,reclen
+	add	hl,de
+	ex	de,hl
+	pop	hl
+	ld	bc,-reclen
+	add	hl,bc
+	or	a		; write ok ?
+	jp	nz,dskful
+	ld	a,h
+	or	l
+	jr	nz,wrobuf1
+	ret
+;
+;	**	symbol table register  **
+;
+regsym:: ;	hl: register data
+	bit	4,(hl)
+	jr	z,regsym5
+;
+; local symbol
+;
+	ld	de,symtbl+(symmax-1)*symlen
+regsym1:
+	ld	bc,idelen*100h
+	push	hl
+	push	de
+	ld	hl,(lcptr)
+	or	a
+	sbc	hl,de
+	jr	z,regsym10
+	pop	de
+	pop	hl
+	push	hl
+	push	de
+regsym2:
+	inc	hl
+	inc	de
+	ld	a,(de)
+	cp	(hl)
+	jr	nz,regsym3
+	or	a
+	jr	z,regsym13
+	djnz	regsym2
+	jr	regsym13
+regsym3:
+	pop	de
+	ld	hl,-symlen
+	add	hl,de
+	ex	de,hl
+	pop	hl
+	jr	regsym1
+;
+; globol symbol
+;
+regsym5:
+	ld	de,symtbl
+regsym6:
+	ld	bc,idelen*100h
+	push	hl
+	push	de
+	ld	hl,(glptr)
+	or	a
+	sbc	hl,de
+	jr	z,regsym11
+	pop	de
+	pop	hl
+	push	hl
+	push	de
+regsym7:
+	inc	hl
+	inc	de
+	ld	a,(de)
+	cp	(hl)
+	jr	nz,regsym8
+	or	a
+	jr	z,regsym13
+	djnz	regsym7
+	jr	regsym13
+regsym8:
+	pop	de
+	ld	hl,symlen
+	add	hl,de
+	ex	de,hl
+	pop	hl
+	jr	regsym6
+;
+regsym10:
+	ld	hl,(lcptr)
+	ld	de,-symlen
+	add	hl,de
+	ld	(lcptr),hl
+	jr	regsym12
+regsym11:
+	ld	hl,(glptr)
+	ld	de,symlen
+	add	hl,de
+	ld	(glptr),hl
+regsym12:
+	ld	hl,(lcptr)
+	ld	de,symlen*2
+	add	hl,de
+	ld	de,(glptr)
+	or	a
+	sbc	hl,de		;symbol table overflow ?
+	jp	z,sytovf
+regsym13:
+	pop	de
+	pop	hl
+	ld	bc,symlen
+	ldir
+	ret
+;
+;	**  symbol table search  **
+;
+seasym:: ;	hl: search data
+	ld	de,symtbl+(symmax-1)*symlen
+seasym1:
+	ld	bc,idelen*100h
+	push	hl
+	push	de
+	ld	a,(de)
+	or	a
+	jr	z,seasym3
+seasym2:
+	inc	hl
+	inc	de
+	ld	a,(de)
+	cp	(hl)
+	jr	nz,seasym4
+	or	a
+	jr	z,$+4
+	djnz	seasym2
+	pop	hl
+	pop	de
+	ld	bc,symlen
+	ldir
+	xor	a
+	ret
+seasym3:
+	pop	hl
+	ld	hl,(glptr)
+	defb	0feh
+seasym4:
+	pop	hl
+	ld	de,-symlen
+	add	hl,de
+	push	hl
+	ld	de,symtbl
+	or	a
+	sbc	hl,de
+	pop	de
+	pop	hl
+	jr	nc,seasym1
+	or	0ffh
+	ret
+;
+;	**  elimination local symbol  **
+;
+elisym::
+	ld	de,(lcptr)
+	ld	hl,symtbl+(symmax-1)*symlen
+	ld	(lcptr),hl
+	or	a
+	sbc	hl,de
+	ld	b,h
+	ld	c,l
+	ld	hl,symlen
+	add	hl,de
+	ld	d,0
+	ld	e,1
+elisym1:
+	ld	a,b
+	or	c
+	ret	z
+	dec	e
+	jr	nz,elisym2
+	ld	e,symlen
+	bit	7,(hl)		;undefined ?
+	jr	z,elisym2
+	push	bc
+	push	de
+	push	hl
+	inc	hl
+	push	hl
+	ld	de,idelen
+	add	hl,de
+	ld	(hl),0
+	ld	hl,udlms
+	call	prtmsg
+	pop	hl
+	call	prtmsg
+	ld	hl,(errcou)
+	inc	hl
+	ld	(errcou),hl
+	pop	hl
+	pop	de
+	pop	bc
+elisym2:
+	ld	(hl),d
+	inc	hl
+	dec	bc
+	jr	elisym1
+;
+udlms:	defb	cr,lf,'    ?: Undefined label : ',0
+;
+;	** clear symbol table  **
+;
+clrstb::
+	ld	hl,symtbl
+	ld	(glptr),hl
+	ld	bc,symmax*symlen
+clrstb1:
+	ld	(hl),0
+	inc	hl
+	dec	bc
+	ld	a,b
+	or	c
+	jr	nz,clrstb1
+	ld	hl,symtbl+(symmax-1)*symlen
+	ld	(lcptr),hl
+	ret
+;
+;	**  put global symbol  **
+;
+putglo::
+	ld	de,symtbl
+	ld	hl,(glptr)
+	or	a
+	sbc	hl,de
+	push	de
+	pop	ix
+putglo1:
+	ld	a,h
+	or	l
+	jr	z,putglo5
+	push	hl
+	ld	l,(ix+idelen+1)
+	ld	h,(ix+idelen+2)	; hl = address
+	ld	(ix+idelen+1),0
+	bit	7,(ix)		;undefined ?
+	jr	z,putglo2
+	push	ix
+	ld	hl,udfms
+	call	prtmsg		;print error message
+	pop	hl
+	push	hl
+	inc	hl
+	call	prtmsg
+	ld	hl,(errcou)
+	inc	hl
+	ld	(errcou),hl
+	pop	ix
+	jr	putglo4
+putglo2:
+	ld	b,58h
+	ld	a,(ix)
+	and	0fh
+	dec	a		;constant ?
+	jr	z,putglo3
+	inc	b
+	dec	a		;variable ?
+	jr	z,putglo3
+	inc	b
+	dec	a
+	jr	nz,putglo4
+putglo3:
+	push	bc
+	push	ix
+	call	ptloc		;put location address
+	pop	hl
+	pop	af
+	push	hl
+	inc	hl
+	ld	de,strbuf
+	ld	bc,idelen+1
+	ldir			;move
+	call	ptname		;put name
+	pop	ix
+putglo4:
+	ld	de,symlen
+	add	ix,de
+	pop	hl
+	or	a
+	sbc	hl,de
+	jr	putglo1
+;
+putglo5:
+	ld	hl,(cloc)
+	jp	ptloc		;put new code loc
+udfms:	defb	cr,lf,'    ?: Undefined function name : ',0
+;---------------------------------------------------
+;-  		w o r k   a r e a    		   -
+;---------------------------------------------------
+		dseg
+work.b::
+
+errcou::defs	2		;error counter
+
+slino:	defs	2		;source line number
+
+lino1:	defs	2		;save area
+cptr1:	defs	2
+slino1:	defs	2
+
+inclf::	defs	1		; 0=source, 0ffh=include
+
+sbrptr::defs	2		;source input buffer read pointer
+sbrlen::defs	2		;source input buffer read length
+ibrptr::defs	2		;include input buffer read pointer
+ibrlen::defs	2		;include input buffer read length
+
+obsptr::defs	2		;object output buffer store pointer
+
+glptr::	defs	2		;global symbol store pointer
+lcptr::	defs	2		;local symbol store pointer
+ofcb::	defs	33		;object fcb
+ifcb::	defs	33		;include fcb
+
+sbmsad::defs	2		;sub error message address
+
+linbufs	equ	128
+linbuf::defs	linbufs		;line buffer
+ilibuf::defs	linbufs
+
+sbfsiz	equ	reclen*4
+souibf::defs	sbfsiz		;source input buffer
+ibfsiz	equ	reclen*4
+incibf::defs	ibfsiz		
+obfsiz	equ	reclen*8
+objobf::defs	obfsiz		;objext output buffer
+symtbl::defs	symmax*symlen	;symbol table
+
+	end	start
+	

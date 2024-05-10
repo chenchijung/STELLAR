@@ -1,0 +1,42 @@
+
+	/*  tower of hanoi  */
+
+prog	hanoi();
+
+cons	cr := $0d,
+	lf := $0a;
+var	n;
+data	ms1:	"tower of hanoi",cr,lf,0,
+	ms2:	"N ( 1 ... 9 )= ? ",0;
+{
+	putstr(;.ms1);
+	{
+		putnl(); putstr(;.ms2);
+	} until (n:=getchr())>= '1' & n<='9';
+	n := n - '0';
+	putnl(2);
+	move(n,'X','Y','Z');
+}
+
+%include hio.lib;
+
+recursive move(n,x,y,z);
+
+data	mvms:	"move ",0,
+	frms:	" from ",0,
+	toms:	" to ",0;
+{
+	if n>1 then {
+		move(n-1,x,z,y);
+		putstr(;.mvms); putchr(n+'0');
+		putstr(;.frms); putchr(x);
+		putstr(;.toms); putchr(y);
+		putnl();
+		move(n-1,z,y,x); }
+	else {
+		putstr(;.mvms); putchr(n+'0');
+		putstr(;.frms); putchr(x);
+		putstr(;.toms); putchr(y);
+		putnl(); }
+}
+	

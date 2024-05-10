@@ -1,0 +1,22 @@
+prog	hello();
+
+cons	cr := $0d,
+	lf := $0a;
+	
+data	hellom:	"Hello World!",cr,lf,'$';
+
+{
+	bdos(9 ;.hellom);
+	bdos(2,'A');
+}
+
+bdos(func,x;ix,#);
+var	argn at ( _work );
+{
+	if argn=1 then inline $dd,$e5,$d1;	/* push ix	; pop de */
+		  else inline $3a,#.x,$5f;	/* ld a,(x)	; ld e,a */
+	inline $3a,#.func,$4f;			/* ld a,(func)	; ld c,a */
+	inline $cd,#$0005;			/* call 0005h		 */
+	inline $e5,$fd,$e1;			/* push hl	; pop iy */
+}
+
